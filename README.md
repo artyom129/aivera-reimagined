@@ -1,12 +1,12 @@
 <div align="center">
 
-# AIvera
+# AIvera Reimagined
 
-### AI-помощник для преподавателей
+### AIvera: переосмысление AI-помощника для преподавателей
 
 Планы уроков · Учебные задания · Обратная связь · История диалогов
 
-[![CI](https://github.com/artyom129/aivera/actions/workflows/ci.yml/badge.svg)](https://github.com/artyom129/aivera/actions/workflows/ci.yml)
+[![CI](https://github.com/artyom129/aivera-reimagined/actions/workflows/ci.yml/badge.svg)](https://github.com/artyom129/aivera-reimagined/actions/workflows/ci.yml)
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs)
 ![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)
@@ -21,15 +21,17 @@
 
 **AIvera — командный проект AIverse.** [artyom129](https://github.com/artyom129) входил в команду и участвовал в первоначальной разработке.
 
-В этом репозитории представлена восстановленная и доработанная версия проекта. Исходная идея и командная разработка относятся к AIverse; текущее восстановление, доработка и сопровождение репозитория ведутся artyom129.
+**AIvera Reimagined — моя восстановленная, изменённая и доработанная версия AIvera.** Я, [artyom129](https://github.com/artyom129), участвовал в исходной команде AIverse, а затем вернулся к проекту: пересмотрел его интеграции, обновил интерфейс и добавил новые возможности.
+
+Исходная идея и первоначальная разработка принадлежат команде AIverse. Этот репозиторий показывает дальнейшее переосмысление проекта и мои доработки, а не разработку приложения с нуля одним автором.
 
 | Этап | Авторство и назначение |
 | --- | --- |
 | Первоначальный проект | Командная разработка AIverse, в которой участвовал artyom129 |
-| Версия в этом репозитории | Восстановление существующего приложения и развитие его возможностей |
+| Версия в этом репозитории | Переосмысление, восстановление, изменения и доработки artyom129 |
 | Текущее сопровождение | [artyom129](https://github.com/artyom129) |
 
-### Что изменилось в восстановленной версии
+### Что я изменил и доработал
 
 - Подготовлена самостоятельная схема Supabase для развёртывания на чистом проекте.
 - Переработаны конфигурация, работа с профилями и защита пользовательских данных.
@@ -72,12 +74,10 @@
 ### 1. Получить исходники
 
 ```bash
-git clone https://github.com/artyom129/aivera.git
-cd aivera
+git clone https://github.com/artyom129/aivera-reimagined.git
+cd aivera-reimagined
 npm ci
 ```
-
-Если репозиторий приватный, для клонирования необходим доступ к нему.
 
 ### 2. Создать базу Supabase
 
@@ -234,6 +234,6 @@ GitHub Actions запускает установку зависимостей, l
 
 <div align="center">
 
-**Изначально создано командой AIverse · Восстановление и сопровождение: [artyom129](https://github.com/artyom129)**
+**Командный оригинал: AIverse · Переосмысление, изменения и доработки: [artyom129](https://github.com/artyom129)**
 
 </div>
