@@ -6,7 +6,7 @@ import { authErrorResponse, invalidRequestResponse } from "../_shared"
 export const dynamic = "force-dynamic"
 
 const schema = z.object({
-  password: z.string().min(6).max(1024),
+  password: z.string().min(8).max(1024),
 })
 
 export async function POST(request: Request) {
@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
 
   if (!parsed.success) {
-    return invalidRequestResponse("Пароль должен содержать минимум 6 символов.")
+    return invalidRequestResponse("Пароль должен быть не короче 8 символов.")
   }
 
   const supabase = await createClient()

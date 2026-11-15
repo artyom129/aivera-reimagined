@@ -1,144 +1,138 @@
 import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
-import { getModeConfig, isMessageSafe, type AIModeKey } from "@/lib/ai-config"
+import { AI_MODE_KEYS, buildSystemPrompt, getModeConfig, type AppLanguage } from "@/lib/ai-config"
+import { isMessageSafe } from "@/lib/ai/safety"
+import { sanitizeForGemini } from "@/lib/ai/sanitize"
+import { fitHistoryToBudget } from "@/lib/ai/history"
+import {
+  BLOCKED_FINISH_REASONS,
+  createLineSplitter,
+  encodeEvent,
+  parseGeminiSseLine,
+  type ChatStreamEvent,
+} from "@/lib/ai/stream"
 import { DEFAULT_AI_MODEL_ID, getApiModelById, isAiModelId } from "@/lib/constants"
+
+export const dynamic = "force-dynamic"
 
 const requestSchema = z.object({
   chatId: z.string().uuid(),
-  mode: z.enum(["default", "lesson_plan", "tests", "feedback"]).default("default"),
+  mode: z.enum(AI_MODE_KEYS as [string, ...string[]]).default("default"),
   privacyConfirmed: z.literal(true),
+  regenerate: z.boolean().default(false),
 })
 
-const MAX_CONTEXT_CHARS = 120_000
-const MAX_MESSAGE_CHARS = 12_000
-const IMAGE_PATTERN = /!\[[^\]]*\]\(data:image\/[^)]+\)/gi
-const FILE_BLOCK_PATTERN = /\s*\[File:\s*[^\]]+\]\s*```[\s\S]*?```/gi
-
-function sanitizeForGemini(text: string) {
-  return text
-    .replace(IMAGE_PATTERN, "")
-    .replace(FILE_BLOCK_PATTERN, "")
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email скрыт]")
-    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[идентификатор скрыт]")
-    .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[номер скрыт]")
-    .replace(/(?:\+?\d[\s().-]*){10,12}/g, "[телефон скрыт]")
-    .trim()
-    .slice(0, MAX_MESSAGE_CHARS)
-}
+const HISTORY_LIMIT = 16
+const CONTEXT_BUDGET_CHARS = 60_000
+const REQUESTS_PER_MINUTE = 12
+const GEMINI_TIMEOUT_MS = 90_000
 
 function jsonError(message: string, status: number) {
-  return Response.json({ error: message }, { status })
+  return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } })
 }
 
 export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) return jsonError("Сервер не настроен: отсутствует GEMINI_API_KEY", 503)
+  if (!apiKey) return jsonError("Сервер не настроен: нет GEMINI_API_KEY", 503)
 
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
-  if (!user) return jsonError("Unauthorized", 401)
+  if (!user) return jsonError("Войдите в аккаунт", 401)
 
   const parsed = requestSchema.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) return jsonError("Подтвердите отправку очищенного текста в Gemini", 400)
+  if (!parsed.success) return jsonError("Подтвердите отправку текста в Gemini", 400)
+  const { chatId, regenerate } = parsed.data
+  const mode = parsed.data.mode as (typeof AI_MODE_KEYS)[number]
 
   const [profileResult, chatResult] = await Promise.all([
-    supabase
-      .from("users")
-      .select("is_blocked, blocked_reason, token_limit, tokens_used")
-      .eq("id", user.id)
-      .single(),
-    supabase
-      .from("chats")
-      .select("id")
-      .eq("id", parsed.data.chatId)
-      .eq("user_id", user.id)
-      .maybeSingle(),
+    supabase.from("users").select("is_blocked, blocked_reason, language").eq("id", user.id).single(),
+    supabase.from("chats").select("id").eq("id", chatId).eq("user_id", user.id).maybeSingle(),
   ])
-  const { data: profile, error: profileError } = profileResult
-  if (profileError || !profile) return jsonError("Профиль пользователя не найден", 403)
+  const profile = profileResult.data
+  if (profileResult.error || !profile) return jsonError("Профиль не найден. Примените миграции Supabase", 403)
   if (profile.is_blocked) return jsonError(profile.blocked_reason || "Аккаунт заблокирован", 403)
-  if (profile.token_limit > 0 && profile.tokens_used >= profile.token_limit) {
-    return jsonError("Лимит токенов исчерпан", 429)
+  if (chatResult.error) return jsonError("Не удалось проверить чат", 503)
+  if (!chatResult.data) return jsonError("Чат не найден", 404)
+
+  const { data: claim, error: claimError } = await supabase.rpc("claim_ai_request", { p_limit: REQUESTS_PER_MINUTE })
+  if (claimError) return jsonError("Не удалось проверить лимиты", 503)
+  if (claim === "quota_exceeded") return jsonError("Месячный лимит токенов исчерпан. Обратитесь к администратору", 429)
+  if (claim === "rate_limited") return jsonError("Слишком много запросов. Подождите минуту", 429)
+  if (claim !== "ok") return jsonError("Запрос отклонён", 403)
+
+  if (regenerate) {
+    const { data: last } = await supabase
+      .from("messages")
+      .select("id, role")
+      .eq("chat_id", chatId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (last?.role === "assistant") {
+      await supabase.from("messages").delete().eq("id", last.id)
+    }
   }
 
-  const { data: chat, error: chatError } = chatResult
-  if (chatError) return jsonError("Не удалось проверить чат", 503)
-  if (!chat) return jsonError("Чат не найден", 404)
-
-  const { data: allowed, error: rateLimitError } = await supabase.rpc("claim_ai_request", { p_limit: 12 })
-  if (rateLimitError) return jsonError("Не удалось проверить лимит запросов", 503)
-  if (!allowed) return jsonError("Слишком много запросов. Попробуйте через минуту", 429)
-
-  const [messagesResult, settingResult] = await Promise.all([
+  const [historyResult, settingResult] = await Promise.all([
     supabase
       .from("messages")
       .select("role, content")
-      .eq("chat_id", chat.id)
+      .eq("chat_id", chatId)
       .order("created_at", { ascending: false })
-      .limit(10),
-    supabase
-      .from("app_settings")
-      .select("value")
-      .eq("key", "default_ai_model")
-      .maybeSingle(),
+      .limit(HISTORY_LIMIT),
+    supabase.from("app_settings").select("value").eq("key", "default_ai_model").maybeSingle(),
   ])
-  const { data: rows, error: messagesError } = messagesResult
-  if (messagesError) return jsonError("Не удалось загрузить историю чата", 500)
+  if (historyResult.error) return jsonError("Не удалось загрузить историю чата", 500)
 
-  const messages = (rows || [])
-    .reverse()
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => ({ role: message.role, text: sanitizeForGemini(message.content || "") }))
-    .filter((message) => message.text.length > 0)
-  if (messages.length === 0) return jsonError("Введите текстовое сообщение", 400)
-
-  const contextSize = messages.reduce((sum, message) => sum + message.text.length, 0)
-  if (contextSize > MAX_CONTEXT_CHARS) return jsonError("История чата слишком большая", 413)
-
-  const lastUserMessage = [...messages].reverse().find((message) => message.role === "user")
-  if (lastUserMessage && !isMessageSafe(lastUserMessage.text)) {
-    return jsonError("Я не могу помочь с этим запросом. Попробуйте сформулировать безопасную учебную задачу", 400)
+  const history = fitHistoryToBudget(
+    (historyResult.data ?? [])
+      .reverse()
+      .map((message) => ({ role: message.role, text: sanitizeForGemini(message.content ?? "") }))
+      .filter((message) => message.text.length > 0),
+    CONTEXT_BUDGET_CHARS,
+  )
+  const lastMessage = history.at(-1)
+  if (!lastMessage || lastMessage.role !== "user") return jsonError("Сначала напишите сообщение", 400)
+  if (!isMessageSafe(lastMessage.text)) {
+    return jsonError("С этим запросом я помочь не могу. Попробуйте сформулировать учебную задачу", 400)
   }
 
-  const { data: setting } = settingResult
-  const modelId = isAiModelId(setting?.value) ? setting.value : DEFAULT_AI_MODEL_ID
-  const apiModel = getApiModelById(modelId)
-  const modeConfig = getModeConfig(parsed.data.mode as AIModeKey)
-  const contents = messages.map((message) => ({
-    role: message.role === "assistant" ? "model" : "user",
-    parts: [{ text: message.text }],
-  }))
+  const settingValue = settingResult.data?.value
+  const modelId = isAiModelId(settingValue) ? settingValue : DEFAULT_AI_MODEL_ID
+  const modeConfig = getModeConfig(mode)
+  const geminiBody = JSON.stringify({
+    system_instruction: { parts: [{ text: buildSystemPrompt(mode, profile.language as AppLanguage) }] },
+    contents: history.map((message) => ({
+      role: message.role === "assistant" ? "model" : "user",
+      parts: [{ text: message.text }],
+    })),
+    generationConfig: { temperature: modeConfig.temperature, maxOutputTokens: modeConfig.maxTokens },
+  })
 
-  const fallbackModel = getApiModelById(DEFAULT_AI_MODEL_ID)
-  let activeApiModel = apiModel
-  const geminiSignal = AbortSignal.any([request.signal, AbortSignal.timeout(60_000)])
-  const requestGemini = (model: string) =>
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(GEMINI_TIMEOUT_MS)])
+  const callGemini = (model: string) =>
     fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: modeConfig.systemPrompt }] },
-          contents,
-          generationConfig: { temperature: modeConfig.temperature, maxOutputTokens: modeConfig.maxTokens },
-        }),
-        signal: geminiSignal,
+        body: geminiBody,
+        signal,
       },
     )
 
+  let model = getApiModelById(modelId)
+  const fallbackModel = getApiModelById(DEFAULT_AI_MODEL_ID)
   let upstream: Response
   try {
-    upstream = await requestGemini(activeApiModel)
-    if (
-      activeApiModel !== fallbackModel &&
-      (upstream.status === 429 || upstream.status === 503)
-    ) {
+    upstream = await callGemini(model)
+    // The bigger model is often overloaded; the default one usually is not.
+    if (model !== fallbackModel && (upstream.status === 429 || upstream.status === 503)) {
       await upstream.body?.cancel()
-      activeApiModel = fallbackModel
-      upstream = await requestGemini(activeApiModel)
+      model = fallbackModel
+      upstream = await callGemini(model)
     }
   } catch (error) {
     if (!request.signal.aborted) console.error("Gemini connection failed", error)
@@ -148,58 +142,87 @@ export async function POST(request: Request) {
   if (!upstream.ok || !upstream.body) {
     const details = await upstream.text().catch(() => "")
     console.error("Gemini request failed", upstream.status, details.slice(0, 300))
+    if (upstream.status === 429) return jsonError("Gemini перегружен. Попробуйте через минуту", 503)
     return jsonError("Сервис Gemini временно недоступен", 502)
   }
 
   const reader = upstream.body.getReader()
-  const decoder = new TextDecoder()
   const encoder = new TextEncoder()
+
   const stream = new ReadableStream({
     async start(controller) {
-      let buffer = ""
-      let totalTokens = 0
-
-      const processLine = (line: string) => {
-        if (!line.startsWith("data: ")) return
-        const payload = line.slice(6).trim()
-        if (!payload) return
+      let clientGone = false
+      const send = (event: ChatStreamEvent) => {
+        if (clientGone) return
         try {
-          const event = JSON.parse(payload)
-          totalTokens = event.usageMetadata?.totalTokenCount ?? totalTokens
-          const text = event.candidates?.[0]?.content?.parts
-            ?.map((part: { text?: string }) => part.text || "")
-            .join("")
-          if (text) controller.enqueue(encoder.encode(`0:${JSON.stringify(text)}\n`))
+          controller.enqueue(encoder.encode(encodeEvent(event)))
         } catch {
-          // Partial SSE records remain buffered; malformed complete records are ignored.
+          clientGone = true
         }
       }
+
+      let answer = ""
+      let totalTokens = 0
+      let finishReason: string | null = null
+      let failed = false
+
+      const splitter = createLineSplitter((line) => {
+        const chunk = parseGeminiSseLine(line)
+        if (!chunk) return
+        if (chunk.totalTokens) totalTokens = chunk.totalTokens
+        if (chunk.finishReason) finishReason = chunk.finishReason
+        if (chunk.text) {
+          answer += chunk.text
+          send({ type: "text", text: chunk.text })
+        }
+      })
 
       try {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split("\n")
-          buffer = lines.pop() || ""
-          lines.forEach(processLine)
+          splitter.push(value)
         }
-        buffer += decoder.decode()
-        if (buffer) processLine(buffer)
+        splitter.flush()
       } catch (error) {
         if (!request.signal.aborted) {
+          failed = true
           console.error("Gemini stream failed", error)
-          controller.enqueue(encoder.encode(`e:${JSON.stringify("Соединение с Gemini прервалось")}\n`))
         }
-      } finally {
-        if (totalTokens > 0) {
-          const { error } = await supabase.rpc("record_ai_usage", {
-            p_model: activeApiModel,
-            p_tokens: totalTokens,
-          })
-          if (error) console.error("Usage accounting failed", error.message)
-        }
+      }
+
+      const stopped = request.signal.aborted
+      let messageId: string | null = null
+
+      if (answer.trim()) {
+        // Saved here, not in the browser: the answer survives a closed tab or a switched chat.
+        const { data: saved, error } = await supabase
+          .from("messages")
+          .insert({ chat_id: chatId, role: "assistant", content: answer })
+          .select("id")
+          .single()
+        if (error) console.error("Saving the answer failed", error.message)
+        messageId = saved?.id ?? null
+      }
+
+      if (totalTokens > 0) {
+        const { error } = await supabase.rpc("record_ai_usage", { p_model: model, p_tokens: totalTokens })
+        if (error) console.error("Usage accounting failed", error.message)
+      }
+
+      if (!answer.trim() && finishReason && BLOCKED_FINISH_REASONS.has(finishReason)) {
+        send({ type: "error", message: "Gemini отказался отвечать на этот запрос. Переформулируйте его" })
+      } else if (failed && !answer) {
+        send({ type: "error", message: "Соединение с Gemini прервалось" })
+      } else if (!answer.trim() && !stopped) {
+        send({ type: "error", message: "Gemini вернул пустой ответ. Попробуйте ещё раз" })
+      }
+
+      send({ type: "done", messageId, truncated: finishReason === "MAX_TOKENS" || failed, stopped })
+      try {
         controller.close()
+      } catch {
+        // already cancelled by the client
       }
     },
     cancel() {

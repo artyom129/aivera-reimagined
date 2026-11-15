@@ -1,94 +1,29 @@
 "use client"
 
-import type React from "react"
-
-import { Card } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { MoreVertical, Trash2, Eye } from "lucide-react"
+import { extractVariables } from "@/lib/templates"
 import type { Database } from "@/lib/types/database"
-import { createClient } from "@/lib/supabase/client"
 
 type Template = Database["public"]["Tables"]["templates"]["Row"]
 
-interface TemplateCardProps {
-  template: Template
-  onClick: () => void
-  onDelete?: (id: string) => void
-  isPublic?: boolean
-}
-
-export function TemplateCard({ template, onClick, onDelete, isPublic }: TemplateCardProps) {
-  const supabase = createClient()
-
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!confirm("Удалить этот шаблон?")) return
-
-    const { error } = await supabase.from("templates").delete().eq("id", template.id)
-
-    if (!error && onDelete) {
-      onDelete(template.id)
-    }
-  }
-
-  const variables = (template.variables as string[]) || []
+export function TemplateCard({ template, onOpen }: { template: Template; onOpen: () => void }) {
+  const fields = extractVariables(template.content)
 
   return (
-    <Card className="group cursor-pointer transition-all hover:border-primary hover:shadow-md" onClick={onClick}>
-      <div className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <h3 className="font-semibold text-balance leading-tight">{template.name}</h3>
-            {template.description && (
-              <p className="mt-1 text-sm text-muted-foreground text-pretty line-clamp-2">{template.description}</p>
-            )}
-          </div>
-          {!isPublic && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100">
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={onClick}>
-                  <Eye className="mr-2 h-4 w-4" />
-                  Просмотр
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleDelete} className="text-destructive">
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Удалить
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          {template.category && (
-            <Badge variant="secondary" className="text-xs">
-              {template.category}
-            </Badge>
-          )}
-          {variables.length > 0 && (
-            <Badge variant="outline" className="text-xs">
-              {variables.length} переменных
-            </Badge>
-          )}
-          {template.is_public && (
-            <Badge variant="outline" className="text-xs">
-              Публичный
-            </Badge>
-          )}
-        </div>
-
-        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-          <span>{template.usage_count} использований</span>
-          <span>{new Date(template.created_at).toLocaleDateString("ru-RU")}</span>
-        </div>
-      </div>
-    </Card>
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex h-full flex-col rounded-lg border bg-card p-4 text-left transition-colors hover:border-ring/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      <span className="font-medium leading-snug">{template.name}</span>
+      {template.description && (
+        <span className="mt-1 line-clamp-2 text-sm text-muted-foreground">{template.description}</span>
+      )}
+      <span className="mt-auto flex flex-wrap gap-x-3 gap-y-1 pt-4 text-xs text-muted-foreground">
+        {template.category && <span>{template.category}</span>}
+        {fields.length > 0 && <span>полей: {fields.length}</span>}
+        <span>использований: {template.usage_count}</span>
+        {template.is_public && <span className="text-primary">общий</span>}
+      </span>
+    </button>
   )
 }

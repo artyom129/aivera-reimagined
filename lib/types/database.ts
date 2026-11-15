@@ -13,6 +13,7 @@ export interface Database {
           language: Database["public"]["Enums"]["app_language"]
           token_limit: number
           tokens_used: number
+          usage_period_start: string
           is_blocked: boolean
           blocked_reason: string | null
           last_login: string | null
@@ -28,6 +29,7 @@ export interface Database {
           language?: Database["public"]["Enums"]["app_language"]
           token_limit?: number
           tokens_used?: number
+          usage_period_start?: string
           is_blocked?: boolean
           blocked_reason?: string | null
           last_login?: string | null
@@ -43,6 +45,7 @@ export interface Database {
           language?: Database["public"]["Enums"]["app_language"]
           token_limit?: number
           tokens_used?: number
+          usage_period_start?: string
           is_blocked?: boolean
           blocked_reason?: string | null
           last_login?: string | null
@@ -346,7 +349,7 @@ export interface Database {
     Functions: {
       claim_ai_request: {
         Args: { p_limit?: number }
-        Returns: boolean
+        Returns: "ok" | "rate_limited" | "quota_exceeded" | "blocked"
       }
       record_ai_usage: {
         Args: { p_model: string; p_tokens: number }

@@ -11,6 +11,7 @@ export const config = {
     "/settings/:path*",
     "/templates/:path*",
     "/lesson-plan/:path*",
+    "/tools/:path*",
     "/admin/:path*",
     "/auth/login",
     "/auth/sign-up",

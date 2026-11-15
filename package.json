@@ -7,9 +7,13 @@
     "dev": "next dev",
     "lint": "eslint .",
     "start": "next start",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fontsource-variable/golos-text": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/literata": "^5.3.0",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",
@@ -54,15 +58,15 @@
     "react-day-picker": "9.8.0",
     "react-dom": "19.2.0",
     "react-hook-form": "^7.60.0",
+    "react-markdown": "^9.0.0",
     "react-resizable-panels": "^2.1.7",
     "recharts": "2.15.4",
+    "remark-gfm": "^4.0.0",
     "sonner": "^1.7.4",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "1.1.2",
-    "zod": "3.25.76",
-    "react-markdown": "^9.0.0",
-    "remark-gfm": "^4.0.0"
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.9",
@@ -74,6 +78,7 @@
     "postcss": "^8.5",
     "tailwindcss": "^4.1.9",
     "tw-animate-css": "1.3.3",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }

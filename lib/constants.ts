@@ -52,6 +52,7 @@ export const MESSAGES_PER_PAGE = 100
 // One-time handoff from structured tools and templates to the chat.
 export const CHAT_DRAFT_STORAGE_KEY = "aivera_chat_draft"
 export const CHAT_AUTOSEND_STORAGE_KEY = "aivera_chat_autosend"
+export const PRIVACY_ACK_STORAGE_KEY = "aivera_privacy_ack"
 
 // User roles
 export const USER_ROLES = {

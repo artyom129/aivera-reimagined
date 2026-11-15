@@ -16,15 +16,19 @@ export function ResendConfirmationButton({ email }: ResendConfirmationButtonProp
 
     setIsLoading(true)
     setStatus(null)
-    const response = await fetch("/api/auth/resend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    })
-    const result = (await response.json().catch(() => ({}))) as { error?: string }
-
-    setStatus(response.ok ? "Новое письмо отправлено. Проверьте также папку «Спам»." : result.error || "Не удалось отправить письмо.")
-    setIsLoading(false)
+    try {
+      const response = await fetch("/api/auth/resend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      })
+      const result = (await response.json().catch(() => ({}))) as { error?: string }
+      setStatus(response.ok ? "Новое письмо отправлено. Проверьте также «Спам»." : result.error || "Не удалось отправить письмо.")
+    } catch {
+      setStatus("Нет связи с сервером. Попробуйте ещё раз.")
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   return (

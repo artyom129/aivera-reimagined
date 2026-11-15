@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState } from "react"
 import type { User } from "@supabase/supabase-js"
 import { ChatSidebar } from "./chat-sidebar"
 import { ChatArea } from "./chat-area"
@@ -30,58 +30,59 @@ export function ChatInterface({
   const [folders, setFolders] = useState(initialFolders)
   const [selectedChatId, setSelectedChatId] = useState<string | null>(initialSelectedChatId)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-  const handleSelectChat = useCallback((newChatId: string | null) => {
-    setSelectedChatId(newChatId)
-    if (window.innerWidth < 1024) {
-      setIsSidebarOpen(false)
-    }
+
+  const selectChat = useCallback((chatId: string | null) => {
+    setSelectedChatId(chatId)
+    setIsSidebarOpen(false)
+    // Keep the address shareable and the back button sane.
+    const url = chatId ? `/chat?id=${chatId}` : "/chat"
+    window.history.replaceState(null, "", url)
   }, [])
 
-  const handleChatUpdate = useCallback((updatedChat: Chat) => {
-    setChats((previous) => [
-      updatedChat,
-      ...previous.filter((chat) => chat.id !== updatedChat.id),
-    ])
+  const updateChat = useCallback((updated: Chat) => {
+    setChats((previous) => [updated, ...previous.filter((chat) => chat.id !== updated.id)])
   }, [])
 
-  const handleChatCreated = useCallback((newChat: Chat) => {
-    setChats((previous) => [newChat, ...previous.filter((chat) => chat.id !== newChat.id)])
-    setSelectedChatId(newChat.id)
-  }, [])
+  const addChat = useCallback(
+    (chat: Chat) => {
+      setChats((previous) => [chat, ...previous.filter((item) => item.id !== chat.id)])
+      selectChat(chat.id)
+    },
+    [selectChat],
+  )
 
   const selectedChat = useMemo(() => chats.find((chat) => chat.id === selectedChatId), [chats, selectedChatId])
 
   return (
     <div className="relative flex h-dvh overflow-hidden bg-background">
       {isSidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={() => setIsSidebarOpen(false)}
-        />
+        <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={() => setIsSidebarOpen(false)} aria-hidden />
       )}
-      <div className={cn(
-        "fixed lg:relative inset-y-0 left-0 z-50 lg:z-auto transition-transform duration-300",
-        isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
-      )}>
+      <div
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 transition-transform duration-200 lg:relative lg:z-auto lg:translate-x-0",
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
         <ChatSidebar
           user={user}
           userProfile={userProfile}
           chats={chats}
           folders={folders}
           selectedChatId={selectedChatId}
-          onSelectChat={handleSelectChat}
+          onSelectChat={selectChat}
           onChatsChange={setChats}
           onFoldersChange={setFolders}
+          onClose={() => setIsSidebarOpen(false)}
         />
       </div>
       <ChatArea
         user={user}
         selectedChat={selectedChat}
-        onChatUpdate={handleChatUpdate}
-        onChatCreated={handleChatCreated}
+        onChatUpdate={updateChat}
+        onChatCreated={addChat}
         isSidebarOpen={isSidebarOpen}
-        onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-        userProfile={userProfile}
+        onToggleSidebar={() => setIsSidebarOpen((open) => !open)}
       />
     </div>
   )

@@ -15,6 +15,7 @@ const updateSchema = z
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    if (!z.string().uuid().safeParse(id).success) return new Response("Template not found", { status: 404 })
     const supabase = await createClient()
     const {
       data: { user },
@@ -34,11 +35,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       .eq("id", id)
       .eq("user_id", user.id)
       .select()
-      .single()
+      .maybeSingle()
 
-    if (error) {
-      return new Response(error.message, { status: 500 })
-    }
+    if (error) return new Response("Template update failed", { status: 500 })
+    if (!data) return new Response("Template not found", { status: 404 })
 
     return Response.json(data)
   } catch (error) {
@@ -50,6 +50,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    if (!z.string().uuid().safeParse(id).success) return new Response("Template not found", { status: 404 })
     const supabase = await createClient()
     const {
       data: { user },
@@ -60,11 +61,15 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       return new Response("Unauthorized", { status: 401 })
     }
 
-    const { error } = await supabase.from("templates").delete().eq("id", id).eq("user_id", user.id)
+    const { data, error } = await supabase
+      .from("templates")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", user.id)
+      .select("id")
 
-    if (error) {
-      return new Response(error.message, { status: 500 })
-    }
+    if (error) return new Response("Template delete failed", { status: 500 })
+    if (!data?.length) return new Response("Template not found", { status: 404 })
 
     return new Response(null, { status: 204 })
   } catch (error) {

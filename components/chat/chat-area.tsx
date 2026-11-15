@@ -1,23 +1,28 @@
 "use client"
 
-import type React from "react"
-import { useState, useEffect, useRef, useCallback, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import type { User } from "@supabase/supabase-js"
+import { AlertCircle, ArrowRight, MessageSquareText, PanelLeft, X } from "lucide-react"
+import { ToolIcon } from "@/components/tools/tool-icon"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { AlertCircle, BookOpen, ClipboardCheck, FileText, PanelLeft, Send, Sparkles } from "lucide-react"
-import { createClient } from "@/lib/supabase/client"
-import type { Database } from "@/lib/types/database"
-import { cn } from "@/lib/utils"
-import { AI_MODES, type AIModeKey } from "@/lib/ai-config"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { MarkdownMessage } from "@/components/chat/markdown-message"
+import { Composer } from "@/components/chat/composer"
+import { MessageItem, TypingIndicator } from "@/components/chat/message-item"
+import { createClient } from "@/lib/supabase/client"
+import { AI_MODES, type AIModeKey } from "@/lib/ai-config"
+import { ChatRequestError, streamChatAnswer } from "@/lib/ai/client"
+import { TOOLS } from "@/lib/tools"
+import type { Database } from "@/lib/types/database"
 import {
   CHAT_AUTOSEND_STORAGE_KEY,
   CHAT_DRAFT_STORAGE_KEY,
   MESSAGES_PER_PAGE,
+  PRIVACY_ACK_STORAGE_KEY,
 } from "@/lib/constants"
+
+type Chat = Database["public"]["Tables"]["chats"]["Row"]
+type Message = Database["public"]["Tables"]["messages"]["Row"]
 
 interface ChatAreaProps {
   user: User
@@ -26,615 +31,416 @@ interface ChatAreaProps {
   onChatCreated: (chat: Chat) => void
   isSidebarOpen: boolean
   onToggleSidebar: () => void
-  userProfile: UserProfile | null
+}
+
+const CONTINUE_PROMPT = "Продолжи с того места, где ты остановился."
+
+function makeTitle(text: string) {
+  const line = text.split("\n")[0].trim()
+  return line.length > 60 ? `${line.slice(0, 57)}...` : line || "Новый чат"
+}
+
+function localMessage(chatId: string, role: Message["role"], content: string, id?: string | null): Message {
+  return {
+    id: id ?? `local-${crypto.randomUUID()}`,
+    chat_id: chatId,
+    role,
+    content,
+    created_at: new Date().toISOString(),
+  }
+}
+
+function readPrivacyAck() {
+  try {
+    return sessionStorage.getItem(PRIVACY_ACK_STORAGE_KEY) === "1"
+  } catch {
+    return false
+  }
 }
 
 export function ChatArea({ user, selectedChat, onChatUpdate, onChatCreated, isSidebarOpen, onToggleSidebar }: ChatAreaProps) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [streamingMessage, setStreamingMessage] = useState("")
-  const [error, setError] = useState<string | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
   const supabase = useMemo(() => createClient(), [])
-  const [selectedMode, setSelectedMode] = useState<AIModeKey>("default")
-  const [privacyConfirmed, setPrivacyConfirmed] = useState(false)
-  const [autoSendPending, setAutoSendPending] = useState(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
-  const activeRequestChatIdRef = useRef<string | null>(null)
+  const chatId = selectedChat?.id ?? null
+
+  const [messages, setMessages] = useState<Message[]>([])
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  const [input, setInput] = useState("")
+  const [mode, setMode] = useState<AIModeKey>("default")
+  const [streamingText, setStreamingText] = useState("")
+  const [isBusy, setIsBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [truncated, setTruncated] = useState(false)
+  const [privacyConfirmed, setPrivacyConfirmedState] = useState(false)
+  const [pendingAutoSend, setPendingAutoSend] = useState(false)
+
+  const abortRef = useRef<AbortController | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+  // Set when this component creates a chat itself, so the "chat switched" effect leaves it alone.
+  const ownNewChatIdRef = useRef<string | null>(null)
 
   useEffect(() => {
-    let isCurrent = true
-    const nextChatId = selectedChat?.id ?? null
+    // sessionStorage is only available after mount
+    setPrivacyConfirmedState(readPrivacyAck())
+  }, [])
 
-    if (activeRequestChatIdRef.current && activeRequestChatIdRef.current !== nextChatId) {
-      abortControllerRef.current?.abort()
-      abortControllerRef.current = null
-      activeRequestChatIdRef.current = null
-      setIsLoading(false)
-      setStreamingMessage("")
+  const setPrivacyConfirmed = useCallback((value: boolean) => {
+    setPrivacyConfirmedState(value)
+    try {
+      if (value) sessionStorage.setItem(PRIVACY_ACK_STORAGE_KEY, "1")
+      else sessionStorage.removeItem(PRIVACY_ACK_STORAGE_KEY)
+    } catch {
+      // private mode: the checkbox simply is not remembered
     }
+  }, [])
 
-    if (selectedChat) {
-      setSelectedMode(selectedChat.ai_mode)
-      const draft = sessionStorage.getItem(CHAT_DRAFT_STORAGE_KEY)
-      if (draft) {
-        setInput(draft)
-        sessionStorage.removeItem(CHAT_DRAFT_STORAGE_KEY)
-        if (sessionStorage.getItem(CHAT_AUTOSEND_STORAGE_KEY) === "1") {
-          sessionStorage.removeItem(CHAT_AUTOSEND_STORAGE_KEY)
-          setPrivacyConfirmed(true)
-          setAutoSendPending(true)
-        }
-      }
-
-      const loadMessages = async () => {
-        const { data, error } = await supabase
-          .from("messages")
-          .select("*")
-          .eq("chat_id", selectedChat.id)
-          .order("created_at", { ascending: false })
-          .limit(MESSAGES_PER_PAGE)
-
-        if (!isCurrent) return
-        if (error) {
-          setError("Не удалось загрузить сообщения этого чата")
-        } else if (data) {
-          setMessages([...data].reverse())
-        }
-      }
-      loadMessages()
-      setError(null)
-    } else {
-      setMessages([])
-    }
-
-    return () => {
-      isCurrent = false
-    }
-  }, [selectedChat, supabase])
-
+  // Switching chats: stop the running answer (the server keeps what was written so far) and load history.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages.length, streamingMessage])
-
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || isLoading) return
-    if (!privacyConfirmed) {
-      setError("Подтвердите, что в сообщении нет личных данных")
+    if (chatId && chatId === ownNewChatIdRef.current) {
+      ownNewChatIdRef.current = null
       return
     }
 
-    const userMessage = input.trim()
-    const messageContent = userMessage
-
-    setInput("")
-    setIsLoading(true)
+    abortRef.current?.abort()
+    abortRef.current = null
+    setIsBusy(false)
+    setStreamingText("")
+    setTruncated(false)
     setError(null)
-    setStreamingMessage("")
 
-    const abortController = new AbortController()
-    abortControllerRef.current = abortController
-    let messageSaved = false
-    let createdChatId: string | null = null
+    if (!chatId) {
+      setMessages([])
+      return
+    }
 
-    try {
-      let activeChat = selectedChat
-      if (!activeChat) {
-        const { data: createdChat, error: createChatError } = await supabase
-          .from("chats")
-          .insert({
-            user_id: user.id,
-            title: userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : ""),
-            ai_mode: selectedMode,
-          })
-          .select()
-          .single()
-
-        if (createChatError) throw createChatError
-        activeChat = createdChat
-        createdChatId = createdChat.id
+    const draft = sessionStorage.getItem(CHAT_DRAFT_STORAGE_KEY)
+    if (draft) {
+      sessionStorage.removeItem(CHAT_DRAFT_STORAGE_KEY)
+      setInput(draft)
+      if (sessionStorage.getItem(CHAT_AUTOSEND_STORAGE_KEY) === "1") {
+        sessionStorage.removeItem(CHAT_AUTOSEND_STORAGE_KEY)
+        // The privacy note was already confirmed in the tool form.
+        sessionStorage.setItem(PRIVACY_ACK_STORAGE_KEY, "1")
+        setPrivacyConfirmedState(true)
+        setPendingAutoSend(true)
       }
-      activeRequestChatIdRef.current = activeChat.id
+    }
 
-      const { data: newMessage, error: insertError } = await supabase
-        .from("messages")
-        .insert({
-          chat_id: activeChat.id,
-          role: "user",
-          content: messageContent,
-        })
-        .select()
-        .single()
-
-      if (insertError) {
-        if (createdChatId) await supabase.from("chats").delete().eq("id", createdChatId)
-        throw insertError
-      }
-      messageSaved = true
-
-      if (newMessage) {
-        setMessages((prev) => [...prev, newMessage])
-      }
-
-      if (createdChatId) {
-        onChatCreated(activeChat)
-      } else if (messages.length === 0) {
-        const title = userMessage.slice(0, 50) + (userMessage.length > 50 ? "..." : "")
-        const { data: updatedChat } = await supabase
-          .from("chats")
-          .update({ title, updated_at: new Date().toISOString() })
-          .eq("id", activeChat.id)
-          .select()
-          .single()
-
-        if (updatedChat) {
-          onChatUpdate(updatedChat)
+    let cancelled = false
+    setLoadingMessages(true)
+    supabase
+      .from("messages")
+      .select("*")
+      .eq("chat_id", chatId)
+      .order("created_at", { ascending: false })
+      .limit(MESSAGES_PER_PAGE)
+      .then(({ data, error: loadError }) => {
+        if (cancelled) return
+        setLoadingMessages(false)
+        if (loadError) setError("Не удалось загрузить сообщения")
+        else {
+          stickToBottomRef.current = true
+          setMessages((data ?? []).reverse())
         }
-      } else {
-        onChatUpdate({ ...activeChat, updated_at: new Date().toISOString() })
-      }
-
-      if (abortController.signal.aborted) throw new Error("AbortError")
-
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          chatId: activeChat.id,
-          mode: selectedMode,
-          privacyConfirmed: true,
-        }),
-        signal: abortController.signal,
       })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || "Не удалось получить ответ Gemini")
-      }
-
-      const reader = response.body?.getReader()
-      const decoder = new TextDecoder()
-      let fullResponse = ""
-      let streamBuffer = ""
-      let streamError: string | null = null
-
-      if (reader) {
-        const processLine = (line: string) => {
-          if (line.startsWith("e:")) {
-            try {
-              const content = JSON.parse(line.slice(2))
-              if (typeof content === "string") streamError = content
-            } catch {
-              streamError = "Соединение с Gemini прервалось"
-            }
-            return
-          }
-          if (!line.startsWith("0:")) return
-          try {
-            const content = JSON.parse(line.slice(2))
-            if (typeof content === "string") {
-              fullResponse += content
-              setStreamingMessage(fullResponse)
-            }
-          } catch {
-            // A malformed complete record is ignored; partial records stay buffered.
-          }
-        }
-
-        while (true) {
-          if (abortController.signal.aborted) {
-            reader.cancel()
-            break
-          }
-
-          const { done, value } = await reader.read()
-          if (done) break
-
-          streamBuffer += decoder.decode(value, { stream: true })
-          const lines = streamBuffer.split("\n")
-          streamBuffer = lines.pop() || ""
-          lines.forEach(processLine)
-        }
-
-        streamBuffer += decoder.decode()
-        if (streamBuffer) processLine(streamBuffer)
-      }
-
-      if (streamError) throw new Error(streamError)
-      if (!fullResponse && !abortController.signal.aborted) {
-        throw new Error("Gemini вернул пустой ответ. Попробуйте ещё раз")
-      }
-
-      if (!abortController.signal.aborted) {
-        const { data: aiMessage, error: aiInsertError } = await supabase
-          .from("messages")
-          .insert({
-            chat_id: activeChat.id,
-            role: "assistant",
-            content: fullResponse,
-          })
-          .select()
-          .single()
-
-        if (aiInsertError) throw aiInsertError
-        if (aiMessage) {
-          setMessages((prev) => [...prev, aiMessage])
-        }
-      }
-
-      setStreamingMessage("")
-      setIsLoading(false)
-      setPrivacyConfirmed(false)
-      abortControllerRef.current = null
-      activeRequestChatIdRef.current = null
-    } catch (err: unknown) {
-      const requestError = err instanceof Error ? err : new Error("Не удалось отправить сообщение")
-      if (requestError.name === "AbortError" || requestError.message === "AbortError") {
-        setError("Генерация остановлена")
-      } else {
-        setError(requestError.message)
-      }
-      if (!messageSaved) setInput(userMessage)
-      setIsLoading(false)
-      setStreamingMessage("")
-      abortControllerRef.current = null
-      activeRequestChatIdRef.current = null
+    return () => {
+      cancelled = true
     }
-  }, [
-    input,
-    selectedChat,
-    isLoading,
-    privacyConfirmed,
-    supabase,
-    user.id,
-    selectedMode,
-    messages.length,
-    onChatCreated,
-    onChatUpdate,
-  ])
+  }, [chatId, supabase])
+
+  // Only when another chat is opened, not on every title update.
+  useEffect(() => {
+    if (selectedChat) setMode(selectedChat.ai_mode)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId])
 
   useEffect(() => {
-    if (!autoSendPending || !selectedChat || !input.trim() || !privacyConfirmed || isLoading) return
-    setAutoSendPending(false)
-    void handleSend()
-  }, [autoSendPending, handleSend, input, isLoading, privacyConfirmed, selectedChat])
+    const element = scrollRef.current
+    if (element && stickToBottomRef.current) element.scrollTop = element.scrollHeight
+  }, [messages, streamingText, isBusy])
 
-  const handleStopGeneration = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-      activeRequestChatIdRef.current = null
-    }
-    setIsLoading(false)
-    setStreamingMessage("")
-  }, [])
+  const handleScroll = () => {
+    const element = scrollRef.current
+    if (!element) return
+    stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+  }
 
-  const handleCopyMessage = useCallback((content: string) => {
-    navigator.clipboard.writeText(content)
-  }, [])
+  const runAnswer = useCallback(
+    async (targetChatId: string, regenerate: boolean) => {
+      const controller = new AbortController()
+      abortRef.current = controller
+      setIsBusy(true)
+      setStreamingText("")
+      setTruncated(false)
+      setError(null)
+      stickToBottomRef.current = true
 
-  const handleModeChange = useCallback(
-    async (value: string) => {
-      const mode = value as AIModeKey
-      setSelectedMode(mode)
-      if (!selectedChat) return
-
-      const { data } = await supabase
-        .from("chats")
-        .update({ ai_mode: mode })
-        .eq("id", selectedChat.id)
-        .select()
-        .single()
-
-      if (data) onChatUpdate(data)
-    },
-    [onChatUpdate, selectedChat, supabase],
-  )
-
-  const renderedMessages = useMemo(
-    () =>
-      messages.map((message) => (
-        <div
-          key={message.id}
-          className={cn("flex gap-3 group", message.role === "user" ? "justify-end" : "justify-start")}
-        >
-          {message.role === "assistant" && (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary">
-              <Sparkles className="h-3.5 w-3.5 text-primary-foreground" />
-            </div>
-          )}
-          <div className="flex flex-col gap-2 max-w-[85%] sm:max-w-[75%]">
-            <div
-              className={cn(
-                "rounded-3xl px-4 py-3",
-                message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground",
-              )}
-            >
-              <MarkdownMessage content={message.content} isUser={message.role === "user"} />
-            </div>
-            <button
-              onClick={() => handleCopyMessage(message.content)}
-              className="opacity-0 group-hover:opacity-100 transition-opacity text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 self-end"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              Копировать
-            </button>
-          </div>
-          {message.role === "user" && (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-muted">
-              <span className="text-xs font-medium">{user.email?.[0].toUpperCase()}</span>
-            </div>
-          )}
-        </div>
-      )),
-    [messages, user.email, handleCopyMessage],
-  )
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault()
-        handleSend()
+      let partial = ""
+      try {
+        const result = await streamChatAnswer({
+          chatId: targetChatId,
+          mode,
+          regenerate,
+          signal: controller.signal,
+          onText: (text) => {
+            partial = text
+            setStreamingText(text)
+          },
+        })
+        if (result.text.trim()) {
+          setMessages((previous) => [...previous, localMessage(targetChatId, "assistant", result.text, result.messageId)])
+        }
+        setTruncated(result.truncated)
+        if (result.error) setError(result.error)
+      } catch (requestError) {
+        if (controller.signal.aborted) {
+          // The server saves the unfinished answer; show the same text here.
+          if (partial.trim()) setMessages((previous) => [...previous, localMessage(targetChatId, "assistant", partial)])
+        } else {
+          setError(requestError instanceof ChatRequestError ? requestError.message : "Нет связи с сервером")
+        }
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null
+        setStreamingText("")
+        setIsBusy(false)
       }
     },
-    [handleSend],
+    [mode],
   )
 
-  const handleQuickStart = useCallback(
-    async (mode: AIModeKey, title: string, draft: string) => {
-      setError(null)
-      const { data: chat, error: createError } = await supabase
-        .from("chats")
-        .insert({
-          user_id: user.id,
-          title,
-          ai_mode: mode,
-        })
-        .select()
-        .single()
-
-      if (createError || !chat) {
-        setError("Не удалось открыть AI-инструмент")
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const content = text.trim()
+      if (!content || isBusy) return
+      if (!privacyConfirmed) {
+        setError("Отметьте, что в тексте нет личных данных учеников")
         return
       }
 
-      sessionStorage.setItem(CHAT_DRAFT_STORAGE_KEY, draft)
-      onChatCreated(chat)
+      setInput("")
+      setError(null)
+      let chat = selectedChat
+
+      try {
+        if (!chat) {
+          const { data, error: createError } = await supabase
+            .from("chats")
+            .insert({ user_id: user.id, title: makeTitle(content), ai_mode: mode })
+            .select()
+            .single()
+          if (createError || !data) throw createError ?? new Error("chat not created")
+          chat = data
+        }
+
+        const { data: saved, error: insertError } = await supabase
+          .from("messages")
+          .insert({ chat_id: chat.id, role: "user", content })
+          .select()
+          .single()
+        if (insertError || !saved) throw insertError ?? new Error("message not saved")
+
+        if (chat !== selectedChat) {
+          ownNewChatIdRef.current = chat.id
+          onChatCreated(chat)
+          setMessages([saved])
+        } else {
+          setMessages((previous) => [...previous, saved])
+          const title = messages.length === 0 ? makeTitle(content) : chat.title
+          onChatUpdate({ ...chat, title, updated_at: new Date().toISOString() })
+          if (title !== chat.title) await supabase.from("chats").update({ title }).eq("id", chat.id)
+        }
+      } catch {
+        setInput(content)
+        setError("Не удалось сохранить сообщение. Проверьте соединение")
+        return
+      }
+
+      await runAnswer(chat.id, false)
     },
-    [onChatCreated, supabase, user.id],
+    [isBusy, privacyConfirmed, selectedChat, supabase, user.id, mode, runAnswer, onChatCreated, onChatUpdate, messages.length],
+  )
+
+  // A tool form opened this chat with a ready prompt: send it once history is loaded.
+  useEffect(() => {
+    if (!pendingAutoSend || loadingMessages || !privacyConfirmed || !input.trim() || isBusy) return
+    setPendingAutoSend(false)
+    void sendMessage(input)
+  }, [pendingAutoSend, loadingMessages, privacyConfirmed, input, isBusy, sendMessage])
+
+  const stop = useCallback(() => abortRef.current?.abort(), [])
+
+  const regenerate = useCallback(() => {
+    if (!chatId || isBusy) return
+    setMessages((previous) => (previous.at(-1)?.role === "assistant" ? previous.slice(0, -1) : previous))
+    void runAnswer(chatId, true)
+  }, [chatId, isBusy, runAnswer])
+
+  const changeMode = useCallback(
+    async (value: string) => {
+      const next = value as AIModeKey
+      setMode(next)
+      if (!selectedChat) return
+      const { data } = await supabase.from("chats").update({ ai_mode: next }).eq("id", selectedChat.id).select().single()
+      if (data) onChatUpdate(data)
+    },
+    [selectedChat, supabase, onChatUpdate],
+  )
+
+  const lastMessage = messages.at(-1)
+  const exportTitle = selectedChat?.title ?? "AIvera"
+
+  const sidebarButton = !isSidebarOpen && (
+    <Button variant="ghost" size="icon" onClick={onToggleSidebar} className="size-8 lg:hidden" aria-label="Открыть список чатов">
+      <PanelLeft className="size-4" />
+    </Button>
+  )
+
+  const errorBanner = error && (
+    <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+      <AlertCircle className="mt-0.5 size-4 shrink-0" />
+      <p className="flex-1">{error}</p>
+      <button type="button" onClick={() => setError(null)} aria-label="Скрыть" className="opacity-70 hover:opacity-100">
+        <X className="size-4" />
+      </button>
+    </div>
+  )
+
+  const composer = (
+    <div className="shrink-0 border-t bg-background px-3 py-3 sm:px-4">
+      <Composer
+        value={input}
+        onChange={setInput}
+        onSend={() => sendMessage(input)}
+        onStop={stop}
+        isBusy={isBusy}
+        privacyConfirmed={privacyConfirmed}
+        onPrivacyChange={setPrivacyConfirmed}
+      />
+    </div>
+  )
+
+  const modeSelect = (
+    <Select value={mode} onValueChange={changeMode}>
+      <SelectTrigger className="h-8 w-[170px] text-sm" aria-label="Режим ассистента">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {Object.entries(AI_MODES).map(([key, config]) => (
+          <SelectItem key={key} value={key}>
+            {config.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   )
 
   if (!selectedChat) {
     return (
-      <div className="flex h-full w-full flex-col overflow-hidden bg-background">
-        {!isSidebarOpen && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute left-4 top-4 z-10 rounded-full"
-            onClick={onToggleSidebar}
-          >
-            <PanelLeft className="h-5 w-5" />
-          </Button>
-        )}
+      <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
+        <header className="flex h-14 shrink-0 items-center gap-2 px-3 sm:px-4">
+          {sidebarButton}
+          <div className="ml-auto">{modeSelect}</div>
+        </header>
+        <div className="flex-1 overflow-y-auto px-4">
+          <div className="rise-in mx-auto max-w-3xl py-8 sm:py-14">
+            <h1 className="font-serif text-3xl font-medium tracking-[-0.01em] sm:text-4xl">
+              Что готовим <span className="chalk">к уроку</span>
+            </h1>
+            <p className="mt-3 text-muted-foreground">Выберите форму или напишите задачу своими словами внизу</p>
 
-        <div className="flex flex-1 overflow-y-auto px-4 py-8">
-          <div className="m-auto w-full max-w-3xl">
-            <div className="text-center">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
-                <Sparkles className="h-6 w-6" />
-              </div>
-              <h2 className="mt-5 text-2xl font-bold tracking-tight sm:text-3xl">Что подготовим сегодня?</h2>
-              <p className="mt-2 text-sm text-muted-foreground">Выберите готовый инструмент или задайте свой вопрос</p>
+            {errorBanner && <div className="mt-6">{errorBanner}</div>}
+
+            <div className="mt-8 grid gap-3 sm:grid-cols-2">
+              {TOOLS.map((tool) => (
+                <Link
+                  key={tool.slug}
+                  href={`/tools/${tool.slug}`}
+                  className="group flex gap-4 rounded-xl border bg-card p-4 transition-colors hover:border-ring/40 hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  <ToolIcon slug={tool.slug} boxed />
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1 font-medium">
+                      {tool.title}
+                      <ArrowRight className="size-3.5 text-primary opacity-0 transition-[opacity,transform] duration-150 group-hover:translate-x-0.5 group-hover:opacity-100" />
+                    </span>
+                    <span className="mt-1 block text-sm leading-5 text-muted-foreground">{tool.summary}</span>
+                  </span>
+                </Link>
+              ))}
             </div>
 
-            {error && (
-              <div className="mt-5 flex items-center gap-2 rounded-2xl bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                {error}
-              </div>
-            )}
-
-            <div className="mt-7 grid gap-3 sm:grid-cols-3">
-              <Link
-                href="/lesson-plan"
-                className="group rounded-2xl border bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg"
-              >
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                  <BookOpen className="h-5 w-5 text-primary" />
-                </span>
-                <p className="mt-4 font-semibold">План урока</p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">Структура, тайминг и оценивание</p>
-              </Link>
-
-              <button
-                type="button"
-                onClick={() =>
-                  handleQuickStart(
-                    "tests",
-                    "Новый тест",
-                    "Помоги создать тест. Сначала уточни у меня предмет, тему, класс, количество вопросов и желаемую сложность.",
-                  )
-                }
-                className="group rounded-2xl border bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg"
-              >
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                  <ClipboardCheck className="h-5 w-5 text-primary" />
-                </span>
-                <p className="mt-4 font-semibold">Создать тест</p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">Вопросы, варианты и ответы</p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  handleQuickStart(
-                    "feedback",
-                    "Проверка работы",
-                    "Помоги подготовить обратную связь к работе ученика. Сначала уточни класс, предмет, критерии оценки и желаемый тон комментария. Не запрашивай персональные данные ученика.",
-                  )
-                }
-                className="group rounded-2xl border bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg"
-              >
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                  <FileText className="h-5 w-5 text-primary" />
-                </span>
-                <p className="mt-4 font-semibold">Проверить работу</p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">Комментарий и рекомендации</p>
-              </button>
-            </div>
+            <h2 className="mt-10 text-sm text-muted-foreground">Или начните с вопроса</h2>
+            <ul className="mt-3 divide-y rounded-xl border bg-card">
+              {[
+                "Объясни дроби для 5 класса через пример с пиццей",
+                "Придумай разминку на 5 минут для урока английского",
+                "Как провести родительское собрание, если класс отстаёт",
+              ].map((suggestion) => (
+                <li key={suggestion}>
+                  <button
+                    type="button"
+                    onClick={() => setInput(suggestion)}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition-colors first:rounded-t-xl last:rounded-b-xl hover:bg-accent/50"
+                  >
+                    <MessageSquareText className="size-4 shrink-0 text-muted-foreground" />
+                    {suggestion}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
-
-        <div className="shrink-0 border-t p-3 sm:p-4 bg-background">
-          <div className="mx-auto max-w-3xl w-full">
-            <div className="relative flex items-end gap-2">
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Сообщение..."
-                className="min-h-[52px] max-h-[200px] w-full resize-none pr-12 bg-background border text-sm rounded-3xl"
-                disabled={isLoading}
-              />
-              <Button
-                onClick={handleSend}
-                disabled={!input.trim() || !privacyConfirmed || isLoading}
-                size="icon"
-                className="absolute bottom-2 right-2 h-8 w-8 rounded-full"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
-            <p className="mt-2 text-center text-xs text-muted-foreground">AIvera может допускать ошибки</p>
-            <label className="mt-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={privacyConfirmed}
-                onChange={(event) => setPrivacyConfirmed(event.target.checked)}
-              />
-              В тексте нет личных данных; отправить очищенный текст в Google Gemini
-            </label>
-          </div>
-        </div>
+        {composer}
       </div>
     )
   }
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden bg-background">
-      <div className="shrink-0 flex items-center gap-3 border-b px-3 sm:px-4 py-3 bg-background">
-        {!isSidebarOpen && (
-          <Button variant="ghost" size="icon" onClick={onToggleSidebar} className="h-9 w-9 rounded-full">
-            <PanelLeft className="h-4 w-4" />
-          </Button>
-        )}
-        <h2 className="text-base font-semibold truncate flex-1">{selectedChat?.title || "Новый чат"}</h2>
-        <Select value={selectedMode} onValueChange={handleModeChange}>
-          <SelectTrigger className="h-9 w-[140px] rounded-full text-sm sm:w-[180px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(AI_MODES).map(([key, config]) => (
-              <SelectItem key={key} value={key}>
-                {config.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:px-4">
+        {sidebarButton}
+        <h1 className="min-w-0 flex-1 truncate font-medium">{selectedChat.title}</h1>
+        {modeSelect}
+      </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 sm:px-4 w-full">
-        <div className="mx-auto max-w-3xl w-full space-y-4 py-6">
-          {error && (
-            <div className="flex items-center gap-2 rounded-2xl bg-destructive/10 p-4 text-destructive">
-              <AlertCircle className="h-5 w-5 shrink-0" />
-              <p className="text-sm">{error}</p>
-            </div>
-          )}
+      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4">
+        <div className="mx-auto max-w-3xl space-y-8 py-8">
+          {loadingMessages && messages.length === 0 && <TypingIndicator />}
 
-          {renderedMessages}
-
-          {streamingMessage && (
-            <div className="flex gap-3">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary">
-                <Sparkles className="h-3.5 w-3.5 text-primary-foreground" />
-              </div>
-              <div className="max-w-[85%] sm:max-w-[75%] rounded-3xl bg-muted px-4 py-3 break-words">
-                <MarkdownMessage content={streamingMessage} isUser={false} />
-              </div>
-            </div>
-          )}
-
-          {isLoading && !streamingMessage && (
-            <div className="flex gap-3">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary">
-                <Sparkles className="h-3.5 w-3.5 animate-pulse text-primary-foreground" />
-              </div>
-              <div className="max-w-[85%] sm:max-w-[75%] rounded-3xl bg-muted px-4 py-3">
-                <p className="text-sm text-muted-foreground">Печатает...</p>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="shrink-0 border-t p-3 sm:p-4 bg-background">
-        <div className="mx-auto max-w-3xl w-full">
-          <div className="relative flex items-end gap-2">
-            <Textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Сообщение..."
-              className="min-h-[52px] max-h-[200px] w-full resize-none pr-12 bg-background border text-sm rounded-3xl"
-              disabled={isLoading}
+          {messages.map((message, index) => (
+            <MessageItem
+              key={message.id}
+              role={message.role}
+              content={message.content}
+              exportTitle={exportTitle}
+              userInitial={(user.email ?? "?").slice(0, 1)}
+              canRegenerate={index === messages.length - 1 && !isBusy}
+              onRegenerate={regenerate}
             />
-            {isLoading ? (
-              <Button
-                onClick={handleStopGeneration}
-                size="icon"
-                variant="destructive"
-                className="absolute bottom-2 right-2 h-8 w-8 rounded-full"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="6" width="12" height="12" rx="2" />
-                </svg>
-              </Button>
+          ))}
+
+          {isBusy &&
+            (streamingText ? (
+              <MessageItem role="assistant" content={streamingText} exportTitle={exportTitle} streaming />
             ) : (
-              <Button
-                onClick={handleSend}
-                disabled={!input.trim() || !privacyConfirmed}
-                size="icon"
-                className="absolute bottom-2 right-2 h-8 w-8 rounded-full"
-              >
-                <Send className="h-4 w-4" />
+              <TypingIndicator />
+            ))}
+
+          {truncated && !isBusy && lastMessage?.role === "assistant" && (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm">
+              <span className="text-muted-foreground">Ответ не поместился целиком.</span>
+              <Button size="sm" variant="outline" className="h-7" onClick={() => sendMessage(CONTINUE_PROMPT)}>
+                Продолжить
               </Button>
-            )}
-          </div>
-          <p className="mt-2 text-center text-xs text-muted-foreground">AIvera может допускать ошибки</p>
-          <label className="mt-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={privacyConfirmed}
-              onChange={(event) => setPrivacyConfirmed(event.target.checked)}
-            />
-            В тексте нет личных данных; отправить очищенный текст в Google Gemini
-          </label>
+            </div>
+          )}
+
+          {errorBanner}
         </div>
       </div>
+
+      {composer}
     </div>
   )
 }
-
-type Chat = Database["public"]["Tables"]["chats"]["Row"]
-type Message = Database["public"]["Tables"]["messages"]["Row"]
-type UserProfile = Database["public"]["Tables"]["users"]["Row"]

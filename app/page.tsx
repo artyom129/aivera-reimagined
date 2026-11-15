@@ -1,185 +1,303 @@
 import Link from "next/link"
-import {
-  ArrowRight,
-  BookOpen,
-  CheckCircle2,
-  ClipboardCheck,
-  FileText,
-  MessageSquare,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react"
+import { ArrowRight, Check, EyeOff, FileDown, ImageOff, KeyRound, Languages, ShieldCheck } from "lucide-react"
+import { Brand, BrandMark } from "@/components/brand"
+import { LessonTimeline } from "@/components/lesson-timeline"
+import { ThemeToggle } from "@/components/theme-toggle"
+import { ToolIcon } from "@/components/tools/tool-icon"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { splitLesson } from "@/lib/lesson-timeline"
+import { TOOLS } from "@/lib/tools"
 
-const features = [
+const HERO_DETAILS = [
+  "Тема и цель на доске",
+  "Устный счёт: 3x = 12, x + 5 = 9",
+  "Разбор 2x + 3 = 11 у доски",
+  "Карточки трёх уровней в парах",
+  "Шкала «понял / не уверен / нужна помощь»",
+]
+
+const STEPS = [
   {
-    icon: BookOpen,
-    title: "План урока",
-    text: "Этапы, тайминг, цели, дифференциация и оценивание в одном документе.",
+    title: "Выберите форму",
+    text: "План урока, тест, отзыв или письмо родителям. Или просто напишите задачу в чат",
   },
   {
-    icon: ClipboardCheck,
-    title: "Тесты и задания",
-    text: "Вопросы нужной сложности с вариантами ответов и ключом для проверки.",
+    title: "Заполните пару полей",
+    text: "Предмет, класс, тема. Справа видно, какой именно текст уйдёт в Gemini",
   },
   {
-    icon: FileText,
-    title: "Обратная связь",
-    text: "Понятные комментарии к работам учеников с конкретными рекомендациями.",
+    title: "Доработайте и заберите",
+    text: "«Сделай проще», «добавь задачу на смекалку». Готовое скачивается для Word или в PDF",
+  },
+]
+
+const PRIVACY = [
+  { icon: KeyRound, title: "Ключ только на сервере", text: "Браузер никогда не видит ключ Gemini" },
+  { icon: EyeOff, title: "Личные данные скрываются", text: "Email, телефоны, номера карт и ИИН убираются до отправки" },
+  { icon: ImageOff, title: "Без файлов и картинок", text: "Загрузка файлов выключена, внешние изображения в ответах не грузятся" },
+  { icon: ShieldCheck, title: "Каждый видит только своё", text: "Доступ к чатам и шаблонам ограничен правилами базы данных" },
+]
+
+const FAQ = [
+  {
+    question: "На каком языке отвечает AIvera?",
+    answer: "На русском, казахском или английском. Язык выбирается в настройках, а в чате можно попросить любой другой.",
+  },
+  {
+    question: "Сколько это стоит?",
+    answer:
+      "У каждого аккаунта есть месячный лимит токенов, его задаёт администратор школы. Один план урока обычно занимает 3–6 тысяч токенов. Счётчик обнуляется первого числа.",
+  },
+  {
+    question: "Можно ли вставить работу ученика?",
+    answer: "Да, в форме «Отзыв на работу». Только уберите имя: AIvera подскажет, что исправить, без личных данных.",
+  },
+  {
+    question: "А если ответ получился не тот?",
+    answer: "Нажмите «Другой вариант» под ответом или напишите, что поменять. Весь разговор сохраняется в истории.",
   },
 ]
 
 export default function HomePage() {
-  return (
-    <div className="min-h-dvh overflow-hidden bg-background">
-      <div className="pointer-events-none fixed inset-x-0 top-0 -z-10 h-[680px] bg-[radial-gradient(circle_at_20%_20%,hsl(var(--primary)/0.16),transparent_36%),radial-gradient(circle_at_80%_10%,hsl(var(--primary)/0.10),transparent_30%)]" />
+  const toolsBySlug = Object.fromEntries(TOOLS.map((tool) => [tool.slug, tool]))
+  const lessonPlan = toolsBySlug["lesson-plan"]
+  const otherTools = TOOLS.filter((tool) => tool.slug !== "lesson-plan")
 
-      <header className="sticky top-0 z-30 border-b bg-background/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg shadow-primary/20">
-              <Sparkles className="h-4 w-4" />
-            </span>
-            <span className="text-lg font-bold tracking-tight">AIvera</span>
-          </Link>
-          <div className="flex items-center gap-2">
-            <Link href="/auth/login">
-              <Button variant="ghost" className="rounded-full">Войти</Button>
+  return (
+    <div className="min-h-dvh bg-background">
+      <header className="sticky top-0 z-30 border-b bg-background/90 backdrop-blur">
+        <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-4 sm:px-6">
+          <Brand />
+          <nav className="hidden gap-6 text-sm text-muted-foreground md:flex" aria-label="Разделы">
+            <a href="#tools" className="transition-colors hover:text-foreground">
+              Инструменты
+            </a>
+            <a href="#how" className="transition-colors hover:text-foreground">
+              Как это работает
+            </a>
+            <a href="#faq" className="transition-colors hover:text-foreground">
+              Вопросы
+            </a>
+          </nav>
+          <div className="ml-auto flex items-center gap-2">
+            <ThemeToggle />
+            <Link href="/auth/login" className="px-2 text-sm text-muted-foreground transition-colors hover:text-foreground">
+              Войти
             </Link>
-            <Link href="/auth/sign-up">
-              <Button className="rounded-full px-5 shadow-lg shadow-primary/20">Начать</Button>
-            </Link>
+            <Button asChild size="sm">
+              <Link href="/auth/sign-up">Начать</Link>
+            </Button>
           </div>
         </div>
       </header>
 
       <main>
-        <section className="mx-auto grid max-w-7xl items-center gap-14 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-[1.05fr_0.95fr] lg:py-28">
-          <div>
-            <div className="mb-6 inline-flex items-center gap-2 rounded-full border bg-background/70 px-3 py-1.5 text-sm shadow-sm backdrop-blur">
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              AI-инструменты для преподавателя
-            </div>
-            <h1 className="max-w-3xl text-balance text-4xl font-bold leading-[1.05] tracking-[-0.04em] sm:text-6xl lg:text-7xl">
-              От темы урока до готовых материалов
-              <span className="text-primary"> за несколько минут</span>
+        <section className="mx-auto grid max-w-6xl items-center gap-12 px-4 pb-20 pt-12 sm:px-6 lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-[0.9fr_1.1fr] lg:gap-16 lg:py-16">
+          <div className="rise-in">
+            <h1 className="text-balance font-serif text-[2.5rem] font-medium leading-[1.08] tracking-[-0.02em] sm:text-[3.25rem] xl:text-[3.5rem]">
+              План урока готов, пока заваривается <span className="chalk">чай</span>
             </h1>
-            <p className="mt-6 max-w-2xl text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
-              AIvera превращает короткое описание в структурированный план урока, задания, тесты и обратную связь — без ручного составления промптов.
+            <p className="mt-6 max-w-xl text-lg leading-8 text-muted-foreground">
+              AIvera пишет планы уроков, тесты с ключом ответов, отзывы на работы учеников и письма родителям. Вы
+              заполняете короткую форму, Gemini делает остальное.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Link href="/auth/sign-up">
-                <Button size="lg" className="w-full rounded-full px-7 sm:w-auto">
-                  Создать первый материал
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </Link>
-              <Link href="/auth/login">
-                <Button size="lg" variant="outline" className="w-full rounded-full bg-background/60 px-7 sm:w-auto">
-                  Открыть рабочее пространство
-                </Button>
-              </Link>
+              <Button asChild size="lg" className="h-12 px-6 text-base">
+                <Link href="/auth/sign-up">
+                  Составить первый план
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+              <Button asChild size="lg" variant="outline" className="h-12 px-6 text-base">
+                <a href="#tools">Посмотреть инструменты</a>
+              </Button>
             </div>
-            <div className="mt-8 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
-              <span className="flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-primary" /> История материалов</span>
-              <span className="flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4 text-primary" /> Готовые режимы</span>
-              <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-primary" /> Защищённые данные</span>
-            </div>
+            <ul className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
+              <li className="flex items-center gap-2">
+                <Languages className="size-4" />
+                Русский, қазақша, English
+              </li>
+              <li className="flex items-center gap-2">
+                <FileDown className="size-4" />
+                Word и PDF
+              </li>
+              <li className="flex items-center gap-2">
+                <EyeOff className="size-4" />
+                Данные учеников скрываются
+              </li>
+            </ul>
           </div>
 
-          <div className="relative mx-auto w-full max-w-xl">
-            <div className="absolute -inset-8 -z-10 rounded-[3rem] bg-primary/10 blur-3xl" />
-            <Card className="overflow-hidden rounded-[2rem] border bg-background/90 shadow-2xl shadow-primary/10 backdrop-blur">
-              <div className="flex items-center justify-between border-b px-5 py-4">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                    <BookOpen className="h-5 w-5 text-primary" />
-                  </span>
-                  <div>
-                    <p className="font-semibold">План урока</p>
-                    <p className="text-xs text-muted-foreground">Математика · 7 класс · 45 минут</p>
-                  </div>
-                </div>
-                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">Готово</span>
-              </div>
-              <CardContent className="space-y-4 p-5">
-                <div className="rounded-2xl bg-muted/60 p-4">
-                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Тема</p>
-                  <p className="mt-1 font-semibold">Линейные уравнения</p>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">Научиться решать уравнения и проверять полученный результат.</p>
-                </div>
-                {[
-                  ["Актуализация знаний", "7 мин"],
-                  ["Объяснение нового материала", "12 мин"],
-                  ["Практическая работа", "18 мин"],
-                  ["Проверка и рефлексия", "8 мин"],
-                ].map(([title, time], index) => (
-                  <div key={title} className="flex items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-background text-xs font-semibold">{index + 1}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{title}</p>
-                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
-                        <div className="h-full rounded-full bg-primary" style={{ width: `${55 + index * 12}%` }} />
-                      </div>
-                    </div>
-                    <span className="text-xs text-muted-foreground">{time}</span>
-                  </div>
+          <figure className="rise-in overflow-hidden rounded-2xl border bg-card shadow-[0_24px_64px_-24px_rgb(0_0_0/0.25)]" style={{ animationDelay: "80ms" }}>
+            <div className="flex h-11 items-center gap-2 border-b px-4">
+              <BrandMark className="size-5 rounded text-[11px]" />
+              <span className="truncate text-sm font-medium">План урока: Линейные уравнения</span>
+              <span className="ml-auto hidden rounded-md border px-2 py-0.5 font-mono text-[11px] text-muted-foreground sm:inline">
+                план урока
+              </span>
+            </div>
+            <div className="grid sm:grid-cols-[180px_1fr]">
+              <div className="hidden border-r bg-sidebar p-3 sm:block">
+                <p className="px-2 pb-2 text-xs text-muted-foreground">Сегодня</p>
+                {["Линейные уравнения", "Тест: причастия", "Письмо: собрание"].map((title, index) => (
+                  <p
+                    key={title}
+                    className={
+                      index === 0
+                        ? "truncate rounded-md bg-sidebar-accent px-2 py-1.5 text-[13px] font-medium"
+                        : "truncate px-2 py-1.5 text-[13px] text-muted-foreground"
+                    }
+                  >
+                    {title}
+                  </p>
                 ))}
-                <div className="flex items-center gap-2 rounded-2xl border border-primary/20 bg-primary/5 p-3 text-sm text-primary">
-                  <Sparkles className="h-4 w-4 shrink-0" />
-                  Добавлены критерии успеха и задания трёх уровней
+                <p className="px-2 pb-2 pt-4 text-xs text-muted-foreground">Инструменты</p>
+                {TOOLS.map((tool) => (
+                  <p key={tool.slug} className="flex items-center gap-2 px-2 py-1.5 text-[13px] text-muted-foreground">
+                    <ToolIcon slug={tool.slug} className="size-3.5" />
+                    {tool.title}
+                  </p>
+                ))}
+              </div>
+              <div className="paper-sheet p-5 sm:p-6">
+                <p className="font-serif text-lg font-medium">Линейные уравнения</p>
+                <p className="mt-1 text-sm text-muted-foreground">Алгебра · 7 класс · 45 минут</p>
+                <p className="mt-4 text-sm leading-6">
+                  <span className="font-medium">Результат:</span> ученики решают уравнения вида ax + b = c и проверяют
+                  ответ подстановкой.
+                </p>
+                <LessonTimeline className="mt-5" stages={splitLesson(45)} details={HERO_DETAILS} compact />
+              </div>
+            </div>
+          </figure>
+        </section>
+
+        <section id="tools" className="scroll-mt-16 border-t bg-muted/40">
+          <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-24">
+            <h2 className="font-serif text-3xl font-medium tracking-[-0.01em] sm:text-4xl">Четыре формы вместо пустого чата</h2>
+            <p className="mt-3 max-w-2xl text-lg text-muted-foreground">
+              Не нужно придумывать запросы. Каждая форма знает, что спросить и как оформить ответ
+            </p>
+
+            <div className="mt-10 grid gap-4 lg:grid-cols-[1.15fr_1fr]">
+              <article className="flex flex-col rounded-2xl border bg-card p-6 sm:p-8">
+                <ToolIcon slug={lessonPlan.slug} boxed />
+                <h3 className="mt-5 text-xl font-medium">{lessonPlan.title}</h3>
+                <p className="mt-1.5 text-muted-foreground">{lessonPlan.summary}</p>
+                <ul className="mt-5 grid gap-2 text-sm sm:grid-cols-2">
+                  {lessonPlan.outcomes.map((outcome) => (
+                    <li key={outcome} className="flex gap-2">
+                      <Check className="mt-0.5 size-4 shrink-0 text-primary" />
+                      {outcome}
+                    </li>
+                  ))}
+                </ul>
+                <div className="paper-sheet mt-6 rounded-xl border p-5">
+                  <LessonTimeline stages={splitLesson(40)} compact />
                 </div>
-              </CardContent>
-            </Card>
+              </article>
+
+              <div className="grid gap-4">
+                {otherTools.map((tool) => (
+                  <article key={tool.slug} className="flex gap-4 rounded-2xl border bg-card p-5 sm:p-6">
+                    <ToolIcon slug={tool.slug} boxed />
+                    <div className="min-w-0">
+                      <h3 className="font-medium">{tool.title}</h3>
+                      <p className="mt-1 text-sm text-muted-foreground">{tool.summary}</p>
+                      <ul className="mt-3 space-y-1 text-sm text-foreground/80">
+                        {tool.outcomes.slice(0, 2).map((outcome) => (
+                          <li key={outcome} className="flex gap-2">
+                            <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                            {outcome}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
-        <section className="border-y bg-muted/30">
-          <div className="mx-auto max-w-7xl px-4 py-16 sm:px-6 sm:py-20">
-            <div className="mx-auto max-w-2xl text-center">
-              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-primary">Рабочий процесс</p>
-              <h2 className="mt-3 text-3xl font-bold tracking-tight sm:text-4xl">Не просто чат с нейросетью</h2>
-              <p className="mt-4 text-muted-foreground">Выберите инструмент, заполните понятную форму и получите материал, который можно доработать в диалоге.</p>
+        <section id="how" className="mx-auto max-w-6xl scroll-mt-16 px-4 py-20 sm:px-6 sm:py-24">
+          <h2 className="font-serif text-3xl font-medium tracking-[-0.01em] sm:text-4xl">Как это работает</h2>
+          <ol className="mt-10 grid gap-10 sm:grid-cols-3 sm:gap-8">
+            {STEPS.map((step, index) => (
+              <li key={step.title} className="border-t pt-5">
+                <span className="font-mono text-sm text-primary">0{index + 1}</span>
+                <h3 className="mt-3 text-lg font-medium">{step.title}</h3>
+                <p className="mt-2 leading-7 text-muted-foreground">{step.text}</p>
+              </li>
+            ))}
+          </ol>
+
+          <div className="mt-20 grid gap-10 rounded-2xl border bg-card p-6 sm:p-10 lg:grid-cols-[0.8fr_1.2fr]">
+            <div>
+              <h2 className="font-serif text-2xl font-medium sm:text-3xl">Про данные учеников</h2>
+              <p className="mt-3 leading-7 text-muted-foreground">
+                Проверка ловит не всё, поэтому имена всё равно лучше не писать. Перед каждой отправкой AIvera просит это
+                подтвердить
+              </p>
             </div>
-            <div className="mt-10 grid gap-4 md:grid-cols-3">
-              {features.map(({ icon: Icon, title, text }, index) => (
-                <Card key={title} className="rounded-3xl border bg-background/80 shadow-sm">
-                  <CardContent className="p-6">
-                    <div className="flex items-center justify-between">
-                      <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10">
-                        <Icon className="h-5 w-5 text-primary" />
-                      </span>
-                      <span className="text-4xl font-bold text-muted/80">0{index + 1}</span>
-                    </div>
-                    <h3 className="mt-6 text-xl font-semibold">{title}</h3>
-                    <p className="mt-2 text-sm leading-6 text-muted-foreground">{text}</p>
-                  </CardContent>
-                </Card>
+            <ul className="grid gap-6 sm:grid-cols-2">
+              {PRIVACY.map(({ icon: Icon, title, text }) => (
+                <li key={title} className="flex gap-3">
+                  <Icon className="mt-0.5 size-[18px] shrink-0 text-muted-foreground" />
+                  <span>
+                    <span className="block font-medium">{title}</span>
+                    <span className="mt-1 block text-sm leading-6 text-muted-foreground">{text}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <section id="faq" className="scroll-mt-16 border-t">
+          <div className="mx-auto grid max-w-6xl gap-10 px-4 py-20 sm:px-6 sm:py-24 lg:grid-cols-[0.8fr_1.2fr]">
+            <h2 className="font-serif text-3xl font-medium tracking-[-0.01em] sm:text-4xl">Частые вопросы</h2>
+            <div className="divide-y border-y">
+              {FAQ.map((item) => (
+                <details key={item.question} className="group py-5">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-medium">
+                    {item.question}
+                    <span className="text-xl leading-none text-muted-foreground transition-transform duration-200 group-open:rotate-45">
+                      +
+                    </span>
+                  </summary>
+                  <p className="mt-3 max-w-2xl leading-7 text-muted-foreground">{item.answer}</p>
+                </details>
               ))}
             </div>
           </div>
         </section>
 
-        <section className="mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-24">
-          <div className="relative overflow-hidden rounded-[2rem] bg-primary px-6 py-12 text-center text-primary-foreground shadow-2xl shadow-primary/20 sm:px-12">
-            <MessageSquare className="mx-auto h-8 w-8 opacity-80" />
-            <h2 className="mx-auto mt-4 max-w-2xl text-3xl font-bold tracking-tight sm:text-4xl">Меньше рутины. Больше времени на преподавание.</h2>
-            <p className="mx-auto mt-4 max-w-xl text-primary-foreground/75">Создайте рабочее пространство и подготовьте первый урок вместе с AIvera.</p>
-            <Link href="/auth/sign-up">
-              <Button size="lg" variant="secondary" className="mt-7 rounded-full px-7">
-                Попробовать AIvera
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </Link>
+        <section className="mx-auto max-w-6xl px-4 pb-20 sm:px-6">
+          <div className="flex flex-col items-start justify-between gap-6 rounded-2xl bg-foreground px-6 py-10 text-background sm:flex-row sm:items-center sm:px-10">
+            <div>
+              <h2 className="font-serif text-2xl font-medium sm:text-3xl">Завтрашний урок можно подготовить сегодня</h2>
+              <p className="mt-2 opacity-70">Регистрация занимает минуту, подтверждение приходит на почту</p>
+            </div>
+            <Button asChild size="lg" variant="secondary" className="h-12 shrink-0 px-6 text-base">
+              <Link href="/auth/sign-up">
+                Создать аккаунт
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
           </div>
         </section>
       </main>
 
-      <footer className="border-t py-8">
-        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 px-4 text-sm text-muted-foreground sm:flex-row sm:px-6">
-          <span className="flex items-center gap-2 font-medium text-foreground"><Sparkles className="h-4 w-4 text-primary" /> AIvera</span>
-          <span>AI-помощник для подготовки учебных материалов</span>
+      <footer className="border-t">
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <span className="flex items-center gap-2">
+            <BrandMark className="size-5 rounded text-[11px]" />
+            Командный проект AIverse, переработанный Koncha Artyom
+          </span>
+          <a href="https://github.com/artyom129/aivera-reimagined" className="transition-colors hover:text-foreground">
+            Исходный код на GitHub
+          </a>
         </div>
       </footer>
     </div>

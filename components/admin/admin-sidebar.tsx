@@ -2,50 +2,52 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { ArrowLeft } from "lucide-react"
+import { BrandMark } from "@/components/brand"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { cn } from "@/lib/utils"
-import { LayoutDashboard, Users, LogOut, MessageSquare, Cpu } from "lucide-react"
-import { Button } from "@/components/ui/button"
 
-const navigation = [
-  { name: "Дашборд", href: "/admin", icon: LayoutDashboard },
-  { name: "Пользователи", href: "/admin/users", icon: Users },
-  { name: "Модель ИИ", href: "/admin/model", icon: Cpu },
-  { name: "Чаты", href: "/chat", icon: MessageSquare },
+const NAVIGATION = [
+  { name: "Обзор", href: "/admin" },
+  { name: "Пользователи", href: "/admin/users" },
+  { name: "Шаблоны", href: "/admin/templates" },
+  { name: "Модель", href: "/admin/model" },
 ]
 
 export function AdminSidebar() {
   const pathname = usePathname()
 
   return (
-    <div className="flex h-full w-64 flex-col border-r bg-sidebar">
-      <div className="flex h-16 items-center border-b px-6">
-        <span className="text-lg font-bold">AIvera Admin</span>
+    <aside className="border-b bg-sidebar text-sidebar-foreground lg:flex lg:h-full lg:w-60 lg:flex-col lg:border-b-0 lg:border-r">
+      <div className="flex h-14 items-center gap-2 px-4">
+        <BrandMark className="size-6 text-[13px]" />
+        <span className="font-semibold tracking-tight">Админка</span>
+        <ThemeToggle className="ml-auto" />
       </div>
-      <div className="flex-1 overflow-y-auto py-4">
-        <nav className="space-y-1 px-2">
-          {navigation.map((item) => (
+      <nav className="flex gap-1 overflow-x-auto px-3 pb-3 lg:flex-1 lg:flex-col lg:pb-0" aria-label="Разделы">
+        {NAVIGATION.map((item) => {
+          const active = item.href === "/admin" ? pathname === item.href : pathname.startsWith(item.href)
+          return (
             <Link
-              key={item.name}
+              key={item.href}
               href={item.href}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "group flex items-center rounded-md px-3 py-2 text-sm font-medium hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                pathname === item.href ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground",
+                "shrink-0 rounded-md px-3 py-1.5 text-sm",
+                active ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground" : "text-sidebar-foreground/75 hover:bg-sidebar-accent/60",
               )}
             >
-              <item.icon className="mr-3 h-5 w-5 flex-shrink-0" />
               {item.name}
             </Link>
-          ))}
-        </nav>
-      </div>
-      <div className="border-t p-4">
-        <Link href="/chat">
-          <Button variant="outline" className="w-full justify-start bg-transparent">
-            <LogOut className="mr-2 h-4 w-4" />
-            Вернуться в чат
-          </Button>
+          )
+        })}
+      </nav>
+      <div className="hidden border-t p-3 lg:block">
+        <Link href="/chat" className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-sidebar-foreground/75 hover:bg-sidebar-accent/60">
+          <ArrowLeft className="size-4" />
+          К чатам
         </Link>
       </div>
-    </div>
+    </aside>
   )
 }

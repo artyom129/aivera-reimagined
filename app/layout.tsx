@@ -1,23 +1,37 @@
 import type React from "react"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
+// Self-hosted, so builds never depend on reaching Google Fonts.
+import "@fontsource-variable/golos-text"
+import "@fontsource-variable/literata"
+import "@fontsource-variable/jetbrains-mono"
 import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
+import { ThemeProvider } from "@/components/theme-provider"
 
 export const metadata: Metadata = {
-  title: "AIvera - AI-ассистент для преподавателей",
-  description: "Создавайте учебные материалы, планируйте уроки и общайтесь с AI",
+  title: {
+    default: "AIvera — помощник учителя",
+    template: "%s · AIvera",
+  },
+  description: "Планы уроков, тесты, отзывы на работы и письма родителям за пару минут",
+  icons: { icon: "/icon.svg" },
 }
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode
-}>) {
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fafafa" },
+    { media: "(prefers-color-scheme: dark)", color: "#141415" },
+  ],
+}
+
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ru">
+    <html lang="ru" suppressHydrationWarning>
       <body className="font-sans antialiased">
-        {children}
-        <Toaster />
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          {children}
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   )

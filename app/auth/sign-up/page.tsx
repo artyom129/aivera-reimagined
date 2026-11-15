@@ -1,48 +1,38 @@
 "use client"
 
 import type React from "react"
-
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Sparkles } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { AuthShell, FormMessage } from "@/components/auth/auth-shell"
 import { PENDING_CONFIRMATION_EMAIL_KEY } from "@/lib/auth"
 
-type SignUpResponse = {
-  error?: string
-  hasSession?: boolean
-}
+type SignUpResponse = { error?: string; code?: string; hasSession?: boolean }
+
+const MIN_PASSWORD = 8
 
 export default function SignUpPage() {
+  const router = useRouter()
+  const [fullName, setFullName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [fullName, setFullName] = useState("")
   const [repeatPassword, setRepeatPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [alreadyExists, setAlreadyExists] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const router = useRouter()
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
+  const handleSignUp = async (event: React.FormEvent) => {
+    event.preventDefault()
     setError(null)
+    setAlreadyExists(false)
 
-    if (password !== repeatPassword) {
-      setError("Пароли не совпадают")
-      setIsLoading(false)
-      return
-    }
+    if (password.length < MIN_PASSWORD) return setError(`Пароль должен быть не короче ${MIN_PASSWORD} символов`)
+    if (password !== repeatPassword) return setError("Пароли не совпадают")
 
-    if (password.length < 6) {
-      setError("Пароль должен содержать минимум 6 символов")
-      setIsLoading(false)
-      return
-    }
-
+    setIsLoading(true)
     try {
       const response = await fetch("/api/auth/sign-up", {
         method: "POST",
@@ -51,101 +41,102 @@ export default function SignUpPage() {
       })
       const result = (await response.json().catch(() => ({}))) as SignUpResponse
 
-      if (!response.ok) throw new Error(result.error || "Не удалось создать аккаунт.")
+      if (!response.ok) {
+        setAlreadyExists(result.code === "user_already_exists")
+        throw new Error(result.error || "Не удалось создать аккаунт.")
+      }
 
       if (result.hasSession) {
         window.location.assign(new URL("/chat", window.location.origin).toString())
-      } else {
-        sessionStorage.setItem(PENDING_CONFIRMATION_EMAIL_KEY, email.trim().toLowerCase())
-        router.push("/auth/sign-up-success")
+        return
       }
-    } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "Произошла ошибка регистрации.")
-    } finally {
+      sessionStorage.setItem(PENDING_CONFIRMATION_EMAIL_KEY, email.trim().toLowerCase())
+      router.push("/auth/sign-up-success")
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "Не удалось создать аккаунт.")
       setIsLoading(false)
     }
   }
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-gradient-to-b from-background to-muted/20 p-6 md:p-10">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex justify-center">
-          <Link href="/" className="flex items-center gap-2">
-            <Sparkles className="h-8 w-8 text-primary" />
-            <span className="text-2xl font-bold">AIvera</span>
+    <AuthShell
+      title="Регистрация"
+      description="Аккаунт нужен, чтобы сохранять чаты и шаблоны."
+      footer={
+        <>
+          Уже есть аккаунт?{" "}
+          <Link href="/auth/login" className="font-medium text-foreground underline underline-offset-4">
+            Войти
           </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSignUp} className="grid gap-5">
+        <div className="grid gap-1.5">
+          <Label htmlFor="fullName">Как к вам обращаться</Label>
+          <Input
+            id="fullName"
+            autoComplete="name"
+            placeholder="Айгуль Серикова"
+            required
+            maxLength={200}
+            value={fullName}
+            onChange={(event) => setFullName(event.target.value)}
+          />
         </div>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-2xl">Регистрация</CardTitle>
-            <CardDescription>Создайте аккаунт для начала работы</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSignUp}>
-              <div className="flex flex-col gap-6">
-                <div className="grid gap-2">
-                  <Label htmlFor="fullName">Полное имя</Label>
-                  <Input
-                    id="fullName"
-                    type="text"
-                    placeholder="Иван Иванов"
-                    required
-                    maxLength={200}
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="teacher@example.com"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="password">Пароль</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="repeat-password">Повторите пароль</Label>
-                  <Input
-                    id="repeat-password"
-                    type="password"
-                    required
-                    value={repeatPassword}
-                    onChange={(e) => setRepeatPassword(e.target.value)}
-                  />
-                </div>
-                {error && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-                {error?.includes("уже зарегистрирован") && (
-                  <Link href="/auth/forgot-password" className="text-center text-sm underline underline-offset-4">
-                    Восстановить пароль
-                  </Link>
-                )}
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Создание аккаунта..." : "Зарегистрироваться"}
-                </Button>
-              </div>
-              <div className="mt-4 text-center text-sm">
-                Уже есть аккаунт?{" "}
-                <Link href="/auth/login" className="underline underline-offset-4">
-                  Войти
+        <div className="grid gap-1.5">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            autoComplete="email"
+            placeholder="teacher@school.kz"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="password">Пароль</Label>
+          <Input
+            id="password"
+            type="password"
+            autoComplete="new-password"
+            minLength={MIN_PASSWORD}
+            required
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">Не короче {MIN_PASSWORD} символов</p>
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="repeat-password">Пароль ещё раз</Label>
+          <Input
+            id="repeat-password"
+            type="password"
+            autoComplete="new-password"
+            required
+            value={repeatPassword}
+            onChange={(event) => setRepeatPassword(event.target.value)}
+          />
+        </div>
+        {error && (
+          <FormMessage tone="error">
+            {error}
+            {alreadyExists && (
+              <>
+                {" "}
+                <Link href="/auth/forgot-password" className="underline underline-offset-4">
+                  Восстановить пароль
                 </Link>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+              </>
+            )}
+          </FormMessage>
+        )}
+        <Button type="submit" disabled={isLoading}>
+          {isLoading ? "Создаём аккаунт..." : "Создать аккаунт"}
+        </Button>
+      </form>
+    </AuthShell>
   )
 }

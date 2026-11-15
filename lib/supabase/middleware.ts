@@ -34,11 +34,9 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const pathname = request.nextUrl.pathname
+  const protectedPrefixes = ["/chat", "/settings", "/templates", "/admin", "/tools", "/lesson-plan"]
   const isProtected =
-    pathname.startsWith("/chat") ||
-    pathname.startsWith("/settings") ||
-    pathname.startsWith("/templates") ||
-    pathname.startsWith("/admin") ||
+    protectedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)) ||
     pathname === "/auth/update-password"
   const isAuthEntry = pathname === "/auth/login" || pathname === "/auth/sign-up"
 

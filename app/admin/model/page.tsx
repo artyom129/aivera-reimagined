@@ -50,9 +50,9 @@ export default function AdminModelPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 px-4 py-8">
+    <div className="max-w-3xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Модель ИИ</h1>
+        <h1 className="font-serif text-3xl font-medium tracking-[-0.01em]">Модель</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Это серверная настройка: выбранная модель применяется ко всем новым ответам AIvera.
         </p>
@@ -75,7 +75,7 @@ export default function AdminModelPage() {
                 key={model.id}
                 htmlFor={model.id}
                 className={cn(
-                  "flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors",
+                  "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
                   selectedModelId === model.id && "border-primary bg-primary/5",
                 )}
               >

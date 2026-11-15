@@ -40,9 +40,7 @@ export async function GET(req: Request) {
 
     const { data, error } = await query.order("usage_count", { ascending: false })
 
-    if (error) {
-      return new Response(error.message, { status: 500 })
-    }
+    if (error) return new Response("Templates unavailable", { status: 500 })
 
     return Response.json(data)
   } catch (error) {
@@ -81,9 +79,7 @@ export async function POST(req: Request) {
       .select()
       .single()
 
-    if (error) {
-      return new Response(error.message, { status: 500 })
-    }
+    if (error) return new Response("Template not saved", { status: 500 })
 
     return Response.json(data)
   } catch (error) {

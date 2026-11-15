@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic"
 
 const signUpSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(320),
-  password: z.string().min(6).max(1024),
+  password: z.string().min(8).max(1024),
   fullName: z.string().trim().min(1).max(200),
 })
 
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const parsed = signUpSchema.safeParse(body)
 
   if (!parsed.success) {
-    return invalidRequestResponse("Проверьте имя, email и пароль. Пароль должен содержать минимум 6 символов.")
+    return invalidRequestResponse("Проверьте имя, email и пароль. Пароль должен быть не короче 8 символов.")
   }
 
   const supabase = await createClient()

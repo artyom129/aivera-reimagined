@@ -1,40 +1,44 @@
 "use client"
 
-import type React from "react"
 import { useCallback, useMemo, useState } from "react"
-import type { User } from "@supabase/supabase-js"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
+import type { User } from "@supabase/supabase-js"
 import {
-  CheckSquare,
-  BookOpen,
+  Check,
   FileText,
-  FolderIcon,
+  Folder as FolderIcon,
   FolderPlus,
+  ListChecks,
   LogOut,
-  MessageSquare,
   MoreHorizontal,
   Pencil,
   Plus,
   Search,
   Settings,
   Shield,
-  Sparkles,
   Trash2,
-  UserIcon,
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { BrandMark } from "@/components/brand"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { useDialogs } from "@/components/dialogs"
+import { useToast } from "@/hooks/use-toast"
 import { createClient } from "@/lib/supabase/client"
+import { groupChatsByDate } from "@/lib/chat-groups"
+import { currentMonthUsage } from "@/lib/usage"
+import { TOOLS } from "@/lib/tools"
+import { ToolIcon } from "@/components/tools/tool-icon"
 import type { Database } from "@/lib/types/database"
 import { cn } from "@/lib/utils"
 
@@ -42,7 +46,8 @@ type Chat = Database["public"]["Tables"]["chats"]["Row"]
 type Folder = Database["public"]["Tables"]["folders"]["Row"]
 type UserProfile = Database["public"]["Tables"]["users"]["Row"]
 
-const UNFILED = "__unfiled__"
+const ALL = "all"
+const UNFILED = "unfiled"
 
 interface ChatSidebarProps {
   user: User
@@ -53,6 +58,7 @@ interface ChatSidebarProps {
   onSelectChat: (chatId: string | null) => void
   onChatsChange: (chats: Chat[]) => void
   onFoldersChange: (folders: Folder[]) => void
+  onClose: () => void
 }
 
 export function ChatSidebar({
@@ -64,449 +70,382 @@ export function ChatSidebar({
   onSelectChat,
   onChatsChange,
   onFoldersChange,
+  onClose,
 }: ChatSidebarProps) {
-  const [searchQuery, setSearchQuery] = useState("")
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
-  const [isSelectionMode, setIsSelectionMode] = useState(false)
-  const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
+  const { toast } = useToast()
+  const { confirm, prompt, dialogs } = useDialogs()
 
-  const handleSignOut = useCallback(async () => {
+  const [search, setSearch] = useState("")
+  const [folderFilter, setFolderFilter] = useState<string>(ALL)
+  const [selecting, setSelecting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+
+  const fail = useCallback(
+    (description: string) => toast({ title: "Не получилось", description, variant: "destructive" }),
+    [toast],
+  )
+
+  const signOut = async () => {
     await supabase.auth.signOut()
     router.replace("/auth/login")
     router.refresh()
-  }, [supabase, router])
+  }
 
-  const handleNewChat = useCallback(() => {
-    setIsSelectionMode(false)
-    setSelectedChatIds(new Set())
-    onSelectChat(null)
-  }, [onSelectChat])
+  const renameChat = async (chat: Chat) => {
+    const title = await prompt({ title: "Название чата", initialValue: chat.title, maxLength: 200 })
+    if (!title || title === chat.title) return
+    const { data, error } = await supabase.from("chats").update({ title }).eq("id", chat.id).select().single()
+    if (error || !data) return fail("Чат не переименован")
+    onChatsChange(chats.map((item) => (item.id === data.id ? data : item)))
+  }
 
-  const handleRenameChat = useCallback(
-    async (chat: Chat) => {
-      const nextTitle = prompt("Новое название чата", chat.title)?.trim()
-      if (!nextTitle || nextTitle === chat.title) return
+  const moveChat = async (chat: Chat, folderId: string | null) => {
+    const { data, error } = await supabase.from("chats").update({ folder_id: folderId }).eq("id", chat.id).select().single()
+    if (error || !data) return fail("Чат не перемещён")
+    onChatsChange(chats.map((item) => (item.id === data.id ? data : item)))
+  }
 
-      const { data, error } = await supabase
-        .from("chats")
-        .update({ title: nextTitle.slice(0, 200) })
-        .eq("id", chat.id)
-        .select()
-        .single()
+  const deleteChats = async (ids: string[]) => {
+    const ok = await confirm({
+      title: ids.length === 1 ? "Удалить чат?" : `Удалить чаты: ${ids.length}?`,
+      description: "Сообщения удалятся вместе с чатом. Отменить это нельзя.",
+      confirmLabel: "Удалить",
+      destructive: true,
+    })
+    if (!ok) return
+    const { error } = await supabase.from("chats").delete().in("id", ids)
+    if (error) return fail("Чаты не удалены")
 
-      if (error) {
-        alert("Не удалось переименовать чат")
-        return
-      }
+    const rest = chats.filter((chat) => !ids.includes(chat.id))
+    onChatsChange(rest)
+    if (selectedChatId && ids.includes(selectedChatId)) onSelectChat(null)
+    setSelecting(false)
+    setSelectedIds(new Set())
+  }
 
-      onChatsChange(chats.map((item) => (item.id === data.id ? data : item)))
-    },
-    [chats, onChatsChange, supabase],
-  )
-
-  const handleMoveChat = useCallback(
-    async (chatId: string, folderId: string | null) => {
-      const { data, error } = await supabase
-        .from("chats")
-        .update({ folder_id: folderId })
-        .eq("id", chatId)
-        .select()
-        .single()
-
-      if (error) {
-        alert("Не удалось переместить чат")
-        return
-      }
-
-      onChatsChange(chats.map((chat) => (chat.id === data.id ? data : chat)))
-    },
-    [chats, onChatsChange, supabase],
-  )
-
-  const handleDeleteChat = useCallback(
-    async (chatId: string) => {
-      if (!confirm("Вы уверены, что хотите удалить этот чат?")) return
-
-      const { error } = await supabase.from("chats").delete().eq("id", chatId)
-      if (error) {
-        alert("Не удалось удалить чат")
-        return
-      }
-
-      const updatedChats = chats.filter((chat) => chat.id !== chatId)
-      onChatsChange(updatedChats)
-      if (selectedChatId === chatId) {
-        onSelectChat(updatedChats[0]?.id || null)
-      }
-    },
-    [chats, selectedChatId, supabase, onChatsChange, onSelectChat],
-  )
-
-  const handleCreateFolder = useCallback(async () => {
-    const name = prompt("Название папки")?.trim()
+  const createFolder = async () => {
+    const name = await prompt({ title: "Новая папка", placeholder: "Например, 7 «Б»", maxLength: 80, confirmLabel: "Создать" })
     if (!name) return
-
-    const { data, error } = await supabase
-      .from("folders")
-      .insert({ user_id: user.id, name: name.slice(0, 80) })
-      .select()
-      .single()
-
-    if (error) {
-      alert(error.code === "23505" ? "Папка с таким названием уже существует" : "Не удалось создать папку")
-      return
-    }
-
+    const { data, error } = await supabase.from("folders").insert({ user_id: user.id, name }).select().single()
+    if (error || !data) return fail(error?.code === "23505" ? "Такая папка уже есть" : "Папка не создана")
     onFoldersChange([data, ...folders])
-    setSelectedFolder(data.id)
-  }, [folders, onFoldersChange, supabase, user.id])
+    setFolderFilter(data.id)
+  }
 
-  const handleRenameFolder = useCallback(
-    async (folder: Folder) => {
-      const name = prompt("Новое название папки", folder.name)?.trim()
-      if (!name || name === folder.name) return
+  const renameFolder = async (folder: Folder) => {
+    const name = await prompt({ title: "Название папки", initialValue: folder.name, maxLength: 80 })
+    if (!name || name === folder.name) return
+    const { data, error } = await supabase.from("folders").update({ name }).eq("id", folder.id).select().single()
+    if (error || !data) return fail(error?.code === "23505" ? "Такая папка уже есть" : "Папка не переименована")
+    onFoldersChange(folders.map((item) => (item.id === data.id ? data : item)))
+  }
 
-      const { data, error } = await supabase
-        .from("folders")
-        .update({ name: name.slice(0, 80) })
-        .eq("id", folder.id)
-        .select()
-        .single()
+  const deleteFolder = async (folder: Folder) => {
+    const ok = await confirm({
+      title: `Удалить папку «${folder.name}»?`,
+      description: "Чаты останутся, просто без папки.",
+      confirmLabel: "Удалить папку",
+      destructive: true,
+    })
+    if (!ok) return
+    const { error } = await supabase.from("folders").delete().eq("id", folder.id)
+    if (error) return fail("Папка не удалена")
+    onFoldersChange(folders.filter((item) => item.id !== folder.id))
+    onChatsChange(chats.map((chat) => (chat.folder_id === folder.id ? { ...chat, folder_id: null } : chat)))
+    if (folderFilter === folder.id) setFolderFilter(ALL)
+  }
 
-      if (error) {
-        alert(error.code === "23505" ? "Папка с таким названием уже существует" : "Не удалось переименовать папку")
-        return
-      }
-
-      onFoldersChange(folders.map((item) => (item.id === data.id ? data : item)))
-    },
-    [folders, onFoldersChange, supabase],
-  )
-
-  const handleDeleteFolder = useCallback(
-    async (folder: Folder) => {
-      if (!confirm(`Удалить папку «${folder.name}»? Чаты останутся без папки.`)) return
-
-      const { error } = await supabase.from("folders").delete().eq("id", folder.id)
-      if (error) {
-        alert("Не удалось удалить папку")
-        return
-      }
-
-      onFoldersChange(folders.filter((item) => item.id !== folder.id))
-      onChatsChange(chats.map((chat) => (chat.folder_id === folder.id ? { ...chat, folder_id: null } : chat)))
-      if (selectedFolder === folder.id) setSelectedFolder(null)
-    },
-    [chats, folders, onChatsChange, onFoldersChange, selectedFolder, supabase],
-  )
-
-  const handleBulkDelete = useCallback(async () => {
-    if (selectedChatIds.size === 0) return
-    if (!confirm(`Вы уверены, что хотите удалить выбранные чаты (${selectedChatIds.size})?`)) return
-
-    const idsToDelete = Array.from(selectedChatIds)
-    const { error } = await supabase.from("chats").delete().in("id", idsToDelete)
-    if (error) {
-      alert("Не удалось удалить чаты")
-      return
-    }
-
-    const updatedChats = chats.filter((chat) => !selectedChatIds.has(chat.id))
-    onChatsChange(updatedChats)
-    if (selectedChatId && selectedChatIds.has(selectedChatId)) {
-      onSelectChat(updatedChats[0]?.id || null)
-    }
-
-    setIsSelectionMode(false)
-    setSelectedChatIds(new Set())
-  }, [selectedChatIds, chats, selectedChatId, supabase, onChatsChange, onSelectChat])
-
-  const toggleChatSelection = useCallback((chatId: string) => {
-    setSelectedChatIds((previous) => {
+  const toggleSelected = (id: string) =>
+    setSelectedIds((previous) => {
       const next = new Set(previous)
-      if (next.has(chatId)) next.delete(chatId)
-      else next.add(chatId)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
-  }, [])
 
-  const toggleSelectionMode = useCallback(() => {
-    setIsSelectionMode((previous) => {
-      if (previous) setSelectedChatIds(new Set())
-      return !previous
+  const visibleChats = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    return chats.filter((chat) => {
+      if (query && !chat.title.toLowerCase().includes(query)) return false
+      if (folderFilter === UNFILED) return chat.folder_id === null
+      if (folderFilter !== ALL) return chat.folder_id === folderFilter
+      return true
     })
-  }, [])
+  }, [chats, search, folderFilter])
 
-  const filteredChats = useMemo(
-    () =>
-      chats.filter((chat) => {
-        const matchesSearch = chat.title.toLowerCase().includes(searchQuery.toLowerCase())
-        const matchesFolder =
-          selectedFolder === null ||
-          (selectedFolder === UNFILED ? chat.folder_id === null : chat.folder_id === selectedFolder)
-        return matchesSearch && matchesFolder
-      }),
-    [chats, searchQuery, selectedFolder],
-  )
+  const groups = useMemo(() => groupChatsByDate(visibleChats), [visibleChats])
+  const usage = userProfile ? currentMonthUsage(userProfile) : null
 
   return (
-    <div className="flex h-full w-64 shrink-0 flex-col overflow-hidden border-r bg-sidebar md:w-72 lg:w-80">
-      <div className="sticky top-0 z-10 flex shrink-0 items-center justify-between border-b bg-sidebar px-4 py-4">
-        <div className="flex items-center gap-2.5">
-          <Sparkles className="h-5 w-5 text-sidebar-primary" />
-          <span className="text-base font-semibold text-sidebar-foreground">AIvera</span>
-        </div>
-        <div className="flex items-center gap-1">
+    <aside className="flex h-full w-72 flex-col border-r bg-sidebar text-sidebar-foreground">
+      <div className="flex h-14 shrink-0 items-center gap-2 px-3">
+        <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
+          <BrandMark className="size-6 text-[13px]" />
+          AIvera
+        </Link>
+        <div className="ml-auto flex items-center">
           <ThemeToggle />
-          <Button
-            variant={isSelectionMode ? "secondary" : "ghost"}
-            size="icon"
-            onClick={toggleSelectionMode}
-            title={isSelectionMode ? "Отменить выбор" : "Выбрать чаты"}
-            className="h-9 w-9 rounded-full"
-          >
-            {isSelectionMode ? <X className="h-4 w-4" /> : <CheckSquare className="h-4 w-4" />}
-          </Button>
-          <Button variant="ghost" size="icon" onClick={handleNewChat} title="Новый чат" className="h-9 w-9 rounded-full">
-            <Plus className="h-4 w-4" />
+          <Button variant="ghost" size="icon" className="size-8 lg:hidden" onClick={onClose} aria-label="Закрыть">
+            <X className="size-4" />
           </Button>
         </div>
       </div>
 
-      <div className="shrink-0 space-y-1 border-b p-3">
-        <p className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Инструменты</p>
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full justify-start rounded-xl"
-          onClick={() => router.push("/lesson-plan")}
-        >
-          <BookOpen className="mr-2 h-4 w-4" />
-          Создать план урока
+      <div className="space-y-1 px-3 pb-3">
+        <Button className="w-full justify-start gap-2" onClick={() => onSelectChat(null)}>
+          <Plus className="size-4" />
+          Новый чат
         </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          className="w-full justify-start rounded-xl"
-          onClick={() => router.push("/templates")}
-        >
-          <FileText className="mr-2 h-4 w-4" />
-          Шаблоны материалов
-        </Button>
+        <nav aria-label="Инструменты" className="space-y-0.5 pt-4">
+          <p className="px-2 pb-1 text-xs text-muted-foreground">Инструменты</p>
+          {TOOLS.map((tool) => (
+            <Link
+              key={tool.slug}
+              href={`/tools/${tool.slug}`}
+              className="flex h-8 items-center gap-2.5 rounded-md px-2 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <ToolIcon slug={tool.slug} className="text-muted-foreground" />
+              {tool.title}
+            </Link>
+          ))}
+          <Link
+            href="/templates"
+            className="flex h-8 items-center gap-2.5 rounded-md px-2 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          >
+            <FileText className="size-4 text-muted-foreground" />
+            Шаблоны
+          </Link>
+        </nav>
       </div>
 
-      {isSelectionMode && (
-        <div className="flex shrink-0 items-center justify-between border-b bg-sidebar-accent/20 px-4 py-2">
-          <span className="text-xs text-muted-foreground">Выбрано: {selectedChatIds.size}</span>
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={handleBulkDelete}
-            disabled={selectedChatIds.size === 0}
-            className="h-7 px-2 text-xs"
-          >
-            Удалить
-          </Button>
-        </div>
-      )}
-
-      <div className="shrink-0 space-y-3 border-b p-3">
+      <div className="space-y-2 border-t px-3 py-3">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Поиск..."
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            className="h-9 rounded-full bg-background pl-9 text-sm"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Поиск по чатам"
+            aria-label="Поиск по чатам"
+            className="h-8 bg-background pl-8 text-sm"
           />
         </div>
-
-        <div>
-          <div className="mb-1 flex items-center justify-between px-2">
-            <span className="text-xs font-medium text-muted-foreground">Папки</span>
-            <Button variant="ghost" size="icon" onClick={handleCreateFolder} className="h-7 w-7" title="Новая папка">
-              <FolderPlus className="h-4 w-4" />
+        <div className="flex items-center gap-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 min-w-0 flex-1 justify-start gap-1.5 px-2 text-xs">
+                <FolderIcon className="size-3.5 shrink-0" />
+                <span className="truncate">
+                  {folderFilter === ALL
+                    ? "Все чаты"
+                    : folderFilter === UNFILED
+                      ? "Без папки"
+                      : (folders.find((folder) => folder.id === folderFilter)?.name ?? "Все чаты")}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-60">
+              <DropdownMenuItem onClick={() => setFolderFilter(ALL)}>Все чаты</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setFolderFilter(UNFILED)}>Без папки</DropdownMenuItem>
+              {folders.length > 0 && <DropdownMenuSeparator />}
+              {folders.map((folder) => (
+                <DropdownMenuItem key={folder.id} onClick={() => setFolderFilter(folder.id)} className="justify-between">
+                  <span className="truncate">{folder.name}</span>
+                  <span className="flex gap-1">
+                    <button
+                      type="button"
+                      aria-label={`Переименовать ${folder.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void renameFolder(folder)
+                      }}
+                      className="rounded p-0.5 opacity-60 hover:opacity-100"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Удалить ${folder.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void deleteFolder(folder)
+                      }}
+                      className="rounded p-0.5 opacity-60 hover:text-destructive hover:opacity-100"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={createFolder}>
+                <FolderPlus className="mr-2 size-4" />
+                Новая папка
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant={selecting ? "secondary" : "ghost"}
+            size="icon"
+            className="size-7"
+            onClick={() => {
+              setSelecting((value) => !value)
+              setSelectedIds(new Set())
+            }}
+            aria-label={selecting ? "Отменить выбор" : "Выбрать несколько"}
+            title={selecting ? "Отменить выбор" : "Выбрать несколько"}
+          >
+            <ListChecks className="size-3.5" />
+          </Button>
+        </div>
+        {selecting && (
+          <div className="flex items-center justify-between rounded-md bg-sidebar-accent px-2 py-1 text-xs">
+            <span>Выбрано: {selectedIds.size}</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+              disabled={selectedIds.size === 0}
+              onClick={() => deleteChats([...selectedIds])}
+            >
+              Удалить
             </Button>
           </div>
-          <button
-            type="button"
-            onClick={() => setSelectedFolder(null)}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm",
-              selectedFolder === null ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50",
-            )}
-          >
-            <MessageSquare className="h-4 w-4" />
-            Все чаты
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedFolder(UNFILED)}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm",
-              selectedFolder === UNFILED ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50",
-            )}
-          >
-            <FolderIcon className="h-4 w-4" />
-            Без папки
-          </button>
-          {folders.map((folder) => (
-            <div key={folder.id} className="group/folder flex items-center">
-              <button
-                type="button"
-                onClick={() => setSelectedFolder(folder.id)}
-                className={cn(
-                  "flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm",
-                  selectedFolder === folder.id ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/50",
-                )}
-              >
-                <FolderIcon className="h-4 w-4 shrink-0" style={{ color: folder.color || undefined }} />
-                <span className="truncate">{folder.name}</span>
-              </button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 opacity-100 sm:opacity-0 sm:group-hover/folder:opacity-100"
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => handleRenameFolder(folder)}>
-                    <Pencil className="mr-2 h-4 w-4" />
-                    Переименовать
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => handleDeleteFolder(folder)} className="text-destructive">
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Удалить
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          ))}
-        </div>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-2">
-        <div className="space-y-1 py-2">
-          {filteredChats.map((chat) => (
-            <div
-              key={chat.id}
-              className={cn(
-                "group flex w-full items-center gap-2 rounded-2xl transition-colors",
-                selectedChatId === chat.id && !isSelectionMode
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent/50",
-              )}
-            >
-              {isSelectionMode && (
-                <div className="flex items-center pl-3">
-                  <Checkbox
-                    checked={selectedChatIds.has(chat.id)}
-                    onCheckedChange={() => toggleChatSelection(chat.id)}
-                    className="h-4 w-4 rounded-sm border-sidebar-foreground/50"
-                  />
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => (isSelectionMode ? toggleChatSelection(chat.id) : onSelectChat(chat.id))}
-                className={cn(
-                  "flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm",
-                  isSelectionMode && "px-2",
-                )}
-              >
-                <MessageSquare className="h-4 w-4 shrink-0" />
-                <span className="truncate">{chat.title}</span>
-              </button>
-
-              {!isSelectionMode && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 rounded-full opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100"
+      <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {groups.length === 0 && (
+          <p className="px-3 py-10 text-center text-sm text-muted-foreground">
+            {search ? "Ничего не нашлось" : "Здесь появятся ваши чаты"}
+          </p>
+        )}
+        {groups.map((group) => (
+          <section key={group.label} className="pt-3">
+            <h2 className="px-2 pb-1 text-xs font-medium text-muted-foreground">{group.label}</h2>
+            <ul>
+              {group.chats.map((chat) => {
+                const active = chat.id === selectedChatId && !selecting
+                const checked = selectedIds.has(chat.id)
+                return (
+                  <li key={chat.id} className="group/chat relative">
+                    <button
+                      type="button"
+                      onClick={() => (selecting ? toggleSelected(chat.id) : onSelectChat(chat.id))}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-md py-1.5 pl-2 pr-8 text-left text-sm",
+                        active ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground" : "hover:bg-sidebar-accent/60",
+                      )}
                     >
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
-                    <DropdownMenuItem onClick={() => handleRenameChat(chat)}>
-                      <Pencil className="mr-2 h-4 w-4" />
-                      Переименовать
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => handleMoveChat(chat.id, null)}>
-                      <FolderIcon className="mr-2 h-4 w-4" />
-                      Без папки
-                    </DropdownMenuItem>
-                    {folders.map((folder) => (
-                      <DropdownMenuItem key={folder.id} onClick={() => handleMoveChat(chat.id, folder.id)}>
-                        <FolderIcon className="mr-2 h-4 w-4" />
-                        {folder.name}
-                      </DropdownMenuItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => handleDeleteChat(chat.id)} className="text-destructive">
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Удалить
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </div>
-          ))}
-
-          {filteredChats.length === 0 && (
-            <div className="py-12 text-center text-sm text-muted-foreground">
-              {searchQuery ? "Чаты не найдены" : "В этой папке нет чатов"}
-            </div>
-          )}
-        </div>
+                      {selecting && (
+                        <span
+                          className={cn(
+                            "flex size-4 shrink-0 items-center justify-center rounded border",
+                            checked && "border-primary bg-primary text-primary-foreground",
+                          )}
+                        >
+                          {checked && <Check className="size-3" />}
+                        </span>
+                      )}
+                      <span className="truncate">{chat.title}</span>
+                    </button>
+                    {!selecting && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Действия с чатом"
+                            className="absolute right-1 top-1/2 size-6 -translate-y-1/2 opacity-100 sm:opacity-0 sm:group-hover/chat:opacity-100 sm:focus-visible:opacity-100 data-[state=open]:opacity-100"
+                          >
+                            <MoreHorizontal className="size-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-52">
+                          <DropdownMenuItem onClick={() => renameChat(chat)}>
+                            <Pencil className="mr-2 size-4" />
+                            Переименовать
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">В папку</DropdownMenuLabel>
+                          <DropdownMenuItem onClick={() => moveChat(chat, null)} disabled={chat.folder_id === null}>
+                            Без папки
+                          </DropdownMenuItem>
+                          {folders.map((folder) => (
+                            <DropdownMenuItem
+                              key={folder.id}
+                              onClick={() => moveChat(chat, folder.id)}
+                              disabled={chat.folder_id === folder.id}
+                            >
+                              <span className="truncate">{folder.name}</span>
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => deleteChats([chat.id])} className="text-destructive focus:text-destructive">
+                            <Trash2 className="mr-2 size-4" />
+                            Удалить
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        ))}
       </div>
 
-      <div className="sticky bottom-0 z-10 shrink-0 border-t bg-sidebar p-2">
+      <div className="border-t p-2">
+        {usage && usage.limit > 0 && (
+          <div className="px-2 pb-2 pt-1">
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Лимит за месяц</span>
+              <span>{Math.round(usage.ratio * 100)}%</span>
+            </div>
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-sidebar-accent">
+              <div
+                className={cn("h-full rounded-full", usage.ratio >= 0.9 ? "bg-destructive" : "bg-primary")}
+                style={{ width: `${Math.min(usage.ratio, 1) * 100}%` }}
+              />
+            </div>
+          </div>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="h-auto w-full justify-start gap-2.5 rounded-2xl px-3 py-2">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">
-                <UserIcon className="h-4 w-4" />
-              </div>
-              <div className="flex min-w-0 flex-col items-start text-left">
-                <span className="w-full truncate text-sm font-medium">{userProfile?.full_name || user.email}</span>
-                <span className="text-xs text-muted-foreground">{userProfile?.role || "teacher"}</span>
-              </div>
+            <Button variant="ghost" className="h-auto w-full justify-start gap-2 px-2 py-1.5">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-xs font-medium uppercase">
+                {(userProfile?.full_name || user.email || "?").slice(0, 1)}
+              </span>
+              <span className="min-w-0 text-left">
+                <span className="block truncate text-sm">{userProfile?.full_name || user.email}</span>
+                {userProfile?.role === "admin" && <span className="block text-xs text-muted-foreground">Администратор</span>}
+              </span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56 rounded-2xl">
+          <DropdownMenuContent align="start" side="top" className="w-60">
             {userProfile?.role === "admin" && (
-              <>
-                <DropdownMenuItem onClick={() => router.push("/admin")}>
-                  <Shield className="mr-2 h-4 w-4" />
-                  Админ-панель
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-              </>
+              <DropdownMenuItem onClick={() => router.push("/admin")}>
+                <Shield className="mr-2 size-4" />
+                Админ-панель
+              </DropdownMenuItem>
             )}
             <DropdownMenuItem onClick={() => router.push("/settings")}>
-              <Settings className="mr-2 h-4 w-4" />
+              <Settings className="mr-2 size-4" />
               Настройки
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleSignOut}>
-              <LogOut className="mr-2 h-4 w-4" />
+            <DropdownMenuItem onClick={signOut}>
+              <LogOut className="mr-2 size-4" />
               Выйти
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-    </div>
+
+      {dialogs}
+    </aside>
   )
 }
-

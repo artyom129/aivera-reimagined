@@ -1,10 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { CheckCircle2, Sparkles } from "lucide-react"
 import Link from "next/link"
+import { useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { AuthShell } from "@/components/auth/auth-shell"
 import { ResendConfirmationButton } from "@/components/auth/resend-confirmation-button"
 import { PENDING_CONFIRMATION_EMAIL_KEY } from "@/lib/auth"
 
@@ -16,35 +15,20 @@ export default function SignUpSuccessPage() {
   }, [])
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-gradient-to-b from-background to-muted/20 p-6 md:p-10">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex justify-center">
-          <Link href="/" className="flex items-center gap-2">
-            <Sparkles className="h-8 w-8 text-primary" />
-            <span className="text-2xl font-bold">AIvera</span>
-          </Link>
-        </div>
-        <Card>
-          <CardHeader>
-            <div className="mb-4 flex justify-center">
-              <CheckCircle2 className="h-16 w-16 text-green-500" />
-            </div>
-            <CardTitle className="text-center text-2xl">Подтвердите почту</CardTitle>
-            <CardDescription className="text-center">
-              {email ? `Письмо отправлено на ${email}` : "Проверьте адрес, указанный при регистрации"}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-center text-sm text-muted-foreground">
-              Откройте ссылку в письме. Если письма нет, проверьте «Спам» и используйте повторную отправку.
-            </p>
-            {email && <ResendConfirmationButton email={email} />}
-            <Link href="/auth/login" className="block">
-              <Button className="w-full">Перейти к входу</Button>
-            </Link>
-          </CardContent>
-        </Card>
+    <AuthShell
+      title="Проверьте почту"
+      description={email ? <>Мы отправили ссылку на {email}.</> : "Мы отправили ссылку на адрес из регистрации."}
+    >
+      <p className="text-sm leading-6 text-muted-foreground">
+        Откройте письмо и нажмите на ссылку, после этого можно входить. Письма нет через пару минут? Проверьте «Спам» или
+        отправьте его ещё раз.
+      </p>
+      <div className="mt-6 grid gap-3">
+        {email && <ResendConfirmationButton email={email} />}
+        <Button asChild variant="outline">
+          <Link href="/auth/login">Перейти ко входу</Link>
+        </Button>
       </div>
-    </div>
+    </AuthShell>
   )
 }
