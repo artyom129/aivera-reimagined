@@ -39,22 +39,22 @@ After the team project ended I took the code and kept going, in two stages.
 
 **Restoration.** The first job was to make AIvera stand up without the team's infrastructure. I wrote a complete Supabase migration for a fresh project, reworked configuration, profiles and access rules, moved sign-in to server routes with confirmation resend and password recovery, put Gemini behind a server API, added the lesson-plan builder and set up an environment template and GitHub Actions checks.
 
-**Reimagining.** Then I used it the way a teacher would, and found where it let them down. This release is the answer.
+**Reimagining.** Then I used it the way a teacher would, and saw how much more it could do for them. This release is that next step.
 
-## 🔄 What I changed and why
+## 🔄 What's new in this version
 
-| Area | What I found | What I did |
-| --- | --- | --- |
-| Tools | Only the lesson plan had a form. Tests and feedback dropped the teacher into an empty chat | Four forms: lesson plan, test, feedback on student work, letter to parents. Each one shows the exact text that will go to Gemini |
-| Answers | Every mode stopped at 900 tokens, so a lesson plan with a stage table never finished | A limit sized for each mode, up to 4,096, and a **Continue** button when an answer still runs out |
-| Saving | The browser saved the answer, so switching chats or closing the tab threw it away | The server saves every answer, including a partial one after **Stop** |
-| Export | Copy and nothing else | **Word**, **print / PDF**, Markdown, and **Another version** for the last answer |
-| Language | `users.language` sat in the database and did nothing | Answers in Russian, Kazakh or English, chosen in Settings |
-| Token limit | A lifetime counter: after 100k tokens a teacher was locked out for good | A monthly limit that resets on the 1st. Admins can raise it or reset the counter |
-| Privacy filter | Any run of 10 to 19 digits was masked, which wrecked number series, dates and timetables | Only real phone numbers, card numbers (Luhn check) and ИИН (checksum) are masked |
-| Safety filter | Words like "terror", "weapon", "drugs" and "rates" were blocked outright | Requests for harmful instructions are blocked. School topics go through |
-| Interface | Stock shadcn, sparkle icons, browser `prompt()` and `alert()` | A designed interface, real dialogs, light and dark themes on every page |
-| Tests | None | 67 unit tests, run in CI with lint, typecheck and build |
+| Area | How it works now |
+| --- | --- |
+| Tools | Four forms: lesson plan, test, feedback on student work, letter to parents. Each one shows the exact text that will go to Gemini |
+| Answers | A limit sized for each mode, up to 4,096, and a **Continue** button when an answer still runs out |
+| Saving | The server saves every answer, including a partial one after **Stop** |
+| Export | **Word**, **print / PDF**, Markdown, and **Another version** for the last answer |
+| Language | Answers in Russian, Kazakh or English, chosen in Settings |
+| Token limit | A monthly limit that resets on the 1st. Admins can raise it or reset the counter |
+| Privacy filter | Only real phone numbers, card numbers (Luhn check) and ИИН (checksum) are masked |
+| Safety filter | Requests for harmful instructions are blocked. School topics go through |
+| Interface | A designed interface, real dialogs, light and dark themes on every page |
+| Tests | 67 unit tests, run in CI with lint, typecheck and build |
 
 ### 🎨 Design
 
@@ -180,27 +180,6 @@ update public.users set role = 'admin' where email = 'you@example.com';
 | `npm run build` | Production build |
 
 The tests cover personal-data masking (and prove lesson content survives it), the safety filter, the streaming protocol and SSE parsing, history trimming, form prompts and validation, the lesson timeline, templates, usage and export. CI runs all four commands on every push.
-
-<details>
-<summary>🐛 Problems found and fixed in this version</summary>
-
-<br>
-
-- **Lesson plans stopped halfway.** `maxOutputTokens` was 900 in every mode. A plan with a stage table, differentiation and homework needs several thousand.
-- **Answers disappeared.** The browser saved the answer only after the stream ended. Switching chats or closing the tab lost it, and Stop threw away the text already written.
-- **A race when starting a new chat.** Creating the chat changed the selected chat, and the effect watching that aborted the request that had just begun.
-- **Lesson material was treated as personal data.** "2, 4, 6, 8, 10, 12", "2026-09-01, 2026-09-15" and a bell schedule came out as `[телефон скрыт]` or `[номер скрыт]`, including inside earlier answers sent back as context.
-- **The keyword filter blocked the curriculum.** "Красный террор", "профилактика наркомании" and "процентные ставки" were rejected.
-- **The token limit lasted forever.** `tokens_used` never reset, so a teacher who hit the limit once stayed locked out.
-- **Line breaks vanished from the teacher's messages.** A prompt from a form showed up as one long line.
-- **Lesson-plan tables broke the layout.** Cells had `white-space: nowrap` and nothing to scroll in.
-- **Dark mode only worked in the chat.** A button in the chat sidebar applied it, so every other page loaded light.
-- **The admin chart was invisible.** It used `hsl(var(--primary))` on variables stored as `oklch`, and it drew every usage row as its own point.
-- **The admin menu had no Templates link**, the sidebar did not fit on a phone, and there was no way to change a limit or block someone with a reason.
-- **The templates API returned 500** for a template that did not exist or belonged to someone else.
-- **Leftovers from the generator template**: the v0 logo as the favicon, unused placeholder images and an unused users table component.
-
-</details>
 
 ## 📂 Project layout
 
